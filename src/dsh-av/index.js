@@ -349,11 +349,25 @@ async function boot(ctx, log) {
      所以它属于 dsh-av 自己，不是一个单独的插件包。
 
      路由 `/dsh-music` → 包内的 `www/音乐台.html`（零依赖单文件，97 KB）。
-     取服务一律走 `ctx.get`（见上面那段为什么），注册包在 effect 里跟着插件卸载。 */
-  const web = ctx.get ? ctx.get('webServer') : null
-  if (web && typeof web.register === 'function' && typeof effect === 'function') {
-    const htmlPath = join(import.meta.dirname, 'www', '音乐台.html')
-    effect(() => web.register({
+
+     ⚠️⚠️ **必须用 `ctx.inject(['webServer'], 回调)`，不能直接 `ctx.get`。**
+     这个坑栽了三次：
+       ① 直接 `ctx.get('webServer')` → **null**（cordis 对没声明的服务只给 null，不报错）
+       ② 加 `export const inject = [...]` → **还是 null**（dsh-av 的插件是 `export default function`，
+          模块里的具名导出 cordis 看不见）
+       ③ 挂成 `dshAv.inject = [...]` → 也没解决问题
+     真正的写法在本机唯一跑通的参照 dsh-mood 里：**运行时注入**。
+         root.inject(['webServer'], mountApi)   ← 回调收到的是"带着那服务的 ctx"
+     dsh-mood 的 `/dsh-mood-api` 一直 200，就是这条路的证明。 */
+  const htmlPath = join(import.meta.dirname, 'www', '音乐台.html')
+  const mountMusicRoute = (c) => {
+    const web = c.get ? c.get('webServer') : null
+    if (!web || typeof web.register !== 'function') {
+      log('音乐台路由：**webServer 拿不到**（注入回调里还是 null）')
+      return
+    }
+    const eff = c.effect || effect
+    if (typeof eff === 'function') eff(() => web.register({
       kind: 'prefix',
       path: '/dsh-music',
       handler(req, res) {
@@ -372,8 +386,13 @@ async function boot(ctx, log) {
       },
     }))
     log('音乐台路由：/dsh-music → ' + htmlPath)
+  }
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], mountMusicRoute)      // ← 正确姿势（照 dsh-mood）
+    log('音乐台路由：已用 ctx.inject([webServer]) 注册（等注入回调触发）')
   } else {
-    log('音乐台路由：**webServer 不可用**（这一页打不开；av 工具本身不受影响）')
+    log('音乐台路由：ctx.inject 不可用，退回直接 ctx.get')
+    mountMusicRoute(ctx)
   }
 
   // ── 工具 ────────────────────────────────────────────────────────────
@@ -709,5 +728,15 @@ async function boot(ctx, log) {
   //
   //    → 等真做前端（client.js）时，照 dsh-mood 那条路重写，别猜。
 }
+
+/* ⚠️⚠️ **inject 必须挂在「默认导出的那个函数」上，不是模块的具名导出。**
+   这一条栽了两次：
+     ① 一开始根本没写 inject → cordis 对"没声明就 ctx.get"直接给 null（不报错，只给 null）
+     ② 后来写成 `export const inject = [...]` → **还是 null**，因为 dsh-av 的插件形态是
+        `export default function dshAv(ctx)`（一个函数），而 cordis 读的是**那个函数对象上的**
+        `.inject`。模块里另有一个同名具名导出，它看不见。
+   对比能跑的音乐台独立包：它的插件是 `{ inject, apply }` 一个**对象**，所以具名导出正好对。
+   两处都留着，谁读哪份都不落空。 */
+dshAv.inject = ['webServer', 'tools']
 
 export { HOME, MODELS, VOICES }

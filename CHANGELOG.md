@@ -4,7 +4,45 @@
 
 ---
 
-## 2026-10-17 · 0.5.3 —— 补上 `inject` 声明（音乐台 404 的根因）
+## 2026-10-17 · 0.5.4 —— 用 ctx.inject 注册路由（音乐台 404 的真正根因）
+
+0.5.3 加的 `export const inject` / `dshAv.inject` **都没解决问题** —— 重启后 `/dsh-music/` 还是 404。
+
+真正的原因要去本机**唯一跑通的那个参照**（dsh-mood，它的 `/dsh-mood-api` 一直 200）里找：
+
+```js
+// dsh-mood 的写法：运行时注入，不声明 inject
+root.inject(['webServer'], mountApi)
+// 回调收到的是「带着那台服务的 ctx」
+const mountApi = (ctx) => {
+  const web = ctx.get('webServer')
+  ctx.effect(() => web.register({ kind: 'prefix', path: '/dsh-mood-api', ... }))
+}
+```
+
+dsh-av 改成同一套：
+
+```js
+ctx.inject(['webServer'], (c) => {
+  const web = c.get('webServer')
+  c.effect(() => web.register({ kind: 'prefix', path: '/dsh-music', ... }))
+})
+```
+
+**三次试错，全是因为没先去看「做得对的那个」**：
+
+| 次数 | 写法 | 结果 |
+| --- | --- | --- |
+| ① | 直接 `ctx.get('webServer')` | null（cordis 对没声明的服务只给 null，不报错） |
+| ② | `export const inject = [...]` | 还是 null（插件是 `export default function`，具名导出看不见） |
+| ③ | `dshAv.inject = [...]` | 还是 null |
+| ④ | **`ctx.inject(['webServer'], cb)`** | ✅ 照 dsh-mood，假 ctx 实测路由注册成功 |
+
+教训：**"日志说服务不可用" 时，先去抄一个正在跑的同类插件，别自己推断 cordis 的约定。**
+
+---
+
+## 2026-10-17 · 0.5.3 —— 补上 `inject` 声明（未解决问题）
 
 重启后发现 `/dsh-music/` 是 404。查 dsh-av 自己的 `load.log`：
 
