@@ -35,7 +35,7 @@
  *   音色（每个音色一份 net_g + index）在 `<数据目录>/dsh-av/voices/<名字>/`
  *   而 `<数据目录>` 默认是 `$DSH_HOME`（即 ~/.dsh），可以用环境变量 DSH_AV_HOME 改。
  */
-import { existsSync, statSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs'
+import { existsSync, statSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import os from 'node:os'
@@ -43,6 +43,62 @@ import os from 'node:os'
 // ⚠️ 目录扫描那套放在 voices.js 里，**不在这里再写一遍** ——
 //    两处各写一份，早晚会有一处不同步（而那种 bug 很安静）。
 import { listVoices, modelStatus, ensureDirs } from './voices.js'
+
+/* ══════════════════════════════════════════════════════════════════════════
+   say —— 零样本语音合成（走本机的 GPT-SoVITS）
+   ──────────────────────────────────────────────────────────────────────────
+   **为什么不塞进纯 JS 那一层**：音色转换那三个 ONNX 是纯 JS，这条是 Python + torch。
+   两条路各自成立 —— 纯 JS 那条算得对，这条换的是"谁在说"。混着讲会让人以为是一层。
+
+   **参考音决定音色，也决定语气。** 这是这套方法的全部要害：
+   要"温柔"，就得拿一段温柔的当参考，不是把音高调上去（调上去只会更尖）。
+   实测：同一句话，男声参考 142 Hz → 输出 142 Hz；女声参考 270 Hz → 输出 268 Hz。
+   ══════════════════════════════════════════════════════════════════════════ */
+const TTS_DIR = process.env.DSH_AV_TTS_DIR || 'D:/GPT-SoVITS-v2pro-20250604'
+const TTS_PORT = Number(process.env.DSH_AV_TTS_PORT || 9880)
+const TTS_PY = join(TTS_DIR, 'runtime', 'python.exe')
+
+/** 服务活着吗 —— 500 也算活着（那是"缺参考音"的正常抱怨） */
+async function ttsReady() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${TTS_PORT}/tts?text=x&text_lang=zh`, {
+      signal: AbortSignal.timeout(2500),
+    })
+    return r.status > 0
+  } catch { return false }
+}
+
+/** 没起就起一个（分离进程，不挡宿主退出）。最多等 ~90 秒。 */
+async function ensureTts(logs) {
+  if (await ttsReady()) return true
+  if (!existsSync(TTS_PY)) { logs.push('TTS: 找不到 runtime —— ' + TTS_PY); return false }
+  try {
+    const { spawn } = await import('node:child_process')
+    const child = spawn(TTS_PY,
+      ['api_v2.py', '-a', '127.0.0.1', '-p', String(TTS_PORT), '-c', 'GPT_SoVITS/configs/tts_infer.yaml'],
+      { cwd: TTS_DIR, detached: true, stdio: 'ignore', windowsHide: true })
+    child.unref()
+    logs.push('TTS: 已拉起 ' + TTS_PORT + '（加载模型约 30~60 秒）')
+  } catch (e) {
+    logs.push('TTS: 起不来 —— ' + (e && e.message ? e.message : e))
+    return false
+  }
+  for (let i = 0; i < 45; i++) {
+    await new Promise((r) => setTimeout(r, 2000))
+    if (await ttsReady()) return true
+  }
+  return false
+}
+
+/** 一个参考音色 = voices/<名字>/{ref.wav, ref.txt} */
+function voiceRef(name) {
+  const dir = join(VOICES, name)
+  const ref = join(dir, 'ref.wav')
+  const txt = join(dir, 'ref.txt')
+  if (!existsSync(ref) || !existsSync(txt)) return null
+  const text = readFileSync(txt, 'utf8').trim()
+  return text ? { ref, text } : null
+}
 
 // ⚠️⚠️ **`@deepseek-ai/dsh-tools` 不用静态 import 了** —— 两个理由，都是血的：
 //
@@ -284,17 +340,22 @@ async function boot(ctx, log) {
         + 'action=setup 打印缺哪几件、各自该多大、从哪来；'
         + 'action=convert 换音色（input/voice/output）；'
         + 'action=video 把音频渲染成片子（input/output/fps/width/preset，拼 mp4 那步要 ffmpeg）；'
-        + 'action=listen 把音频整理成 dsh-mood ASR 可读的 16k 单声道 wav。\n'
+        + 'action=listen 把音频整理成 dsh-mood ASR 可读的 16k 单声道 wav；'
+        + 'action=say **零样本语音合成**（text/voice/output）—— 给一段 3~10 秒参考音，'
+        + '直接说那段声音，**不用训练**（走本机的 GPT-SoVITS；参考音决定音色**和语气**，'
+        + '要温柔就拿一段温柔的当参考，不是把音高调上去）。\n'
         + '⚠️ 检索（Faiss index）还没接 —— 那是 net_g 外面一层，影响"像不像"而不是"算得对不对"。',
       parameters: {
         action: {
           type: 'string',
-          enum: ['status', 'setup', 'convert', 'video', 'listen'],
+          enum: ['status', 'setup', 'convert', 'video', 'listen', 'say'],
           description: 'status=看现状（默认）；setup=打缺失清单和来源；'
-            + 'convert=换音色；video=把音频渲染成片子；listen=输出 16k ASR 音频',
+            + 'convert=换音色；video=把音频渲染成片子；listen=输出 16k ASR 音频；'
+            + 'say=零样本语音合成（要 text；voice=voices/ 下的名字，默认 gentle）',
         },
+        text: { type: 'string', description: 'say：要念的文字（中文）' },
         input: { type: 'string', description: 'convert / video / listen：输入音频路径（wav）' },
-        voice: { type: 'string', description: 'convert：音色名（voices/ 下的目录名）' },
+        voice: { type: 'string', description: 'convert：音色名（voices/ 下的目录名）；say：参考音色名（默认 gentle）' },
         output: { type: 'string', description: 'convert 出 wav；video 出 mp4；listen 出 16k wav' },
         compatOutput: { type: 'string', description: 'convert：可选，额外输出 16k ASR 兼容 wav' },
         fps: { type: 'number', description: 'video：帧率（默认 24）' },
@@ -309,6 +370,53 @@ async function boot(ctx, log) {
       async execute(args) {
         const action = args && args.action ? String(args.action) : 'status'
         // 不涉及模型的两条路径不要扫描模型和音色目录，减少启动等待。
+        if (action === 'say') {
+          const text = args && args.text ? String(args.text).trim() : ''
+          if (!text) return { ok: false, message: 'say 要 text（要说的话）' }
+          const name = args && args.voice ? String(args.voice) : 'gentle'
+          const v = (args && args.ref)
+            ? { ref: String(args.ref), text: String(args.refText || '').trim() }
+            : voiceRef(name)
+          if (!v) {
+            return { ok: false, message: `找不到参考音色「${name}」。\n`
+              + `放一对进去就行：${join(VOICES, name)}\\ref.wav（3~10 秒人声）+ ref.txt（它说了什么）\n`
+              + '⚠️ ref.txt 必须真的是那段话 —— 对不上，克隆出来的调子就会跑。' }
+          }
+          if (!v.text) return { ok: false, message: '参考音缺文本（ref.txt 是空的）' }
+          const output = (args && args.output) ? String(args.output)
+            : join(HOME, 'say-' + Date.now() + '.wav')
+          const logs = []
+          const up = await ensureTts(logs)
+          if (!up) {
+            return { ok: false, message: '语音合成服务起不来。\n路径：' + TTS_DIR + '\n端口：' + TTS_PORT + '\n'
+              + (logs.length ? logs.join('\n') : '') }
+          }
+          try {
+            const r = await fetch(`http://127.0.0.1:${TTS_PORT}/tts`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                text, text_lang: 'zh',
+                ref_audio_path: v.ref, prompt_text: v.text, prompt_lang: 'zh',
+                text_split_method: 'cut5', media_type: 'wav', streaming_mode: false,
+              }),
+              signal: AbortSignal.timeout(300000),
+            })
+            if (!r.ok) {
+              const t = await r.text().catch(() => '')
+              return { ok: false, message: `合成失败 HTTP ${r.status}：${t.slice(0, 300)}` }
+            }
+            const buf = Buffer.from(await r.arrayBuffer())
+            if (buf.length < 2000) return { ok: false, message: `返回的不是音频（${buf.length} 字节）` }
+            writeFileSync(output, buf)
+            return { ok: true, message: `已合成：${output}\n`
+              + `${(buf.length / 1024).toFixed(1)} KB · 音色「${name}」\n`
+              + `参考音：${v.ref}\n`
+              + '⚠️ 音色**和语气**都来自这段参考音 —— 想换调子就换参考音，不用重训。' }
+          } catch (e) {
+            return { ok: false, message: '合成请求出错：' + String(e && e.message ? e.message : e).slice(0, 300) }
+          }
+        }
         if (action === 'listen') {
           const input = args && args.input ? String(args.input) : ''
           const output = args && args.output ? String(args.output)
