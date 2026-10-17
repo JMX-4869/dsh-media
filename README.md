@@ -20,14 +20,14 @@
 
 ## 包
 
-- 压缩包：`packages/dsh-av-0.5.0.zip`（**106 KB**，16 个文件）
+- 压缩包：`packages/dsh-av-0.5.6.zip`（**116 KB**，19 个文件）
 - 源码：`src/dsh-av/`
 
 目录里必须有：`index.js`（宿主：av 工具 + `/dsh-music` 路由）、`client.js`（客户端：设置页里的音乐台）、`www/音乐台.html`（页面本体）。
 
 ## 安装
 
-1. 解压 `packages/dsh-av-0.5.0.zip` 到任意目录，例如 `<某处>/dsh-av`
+1. 解压 `packages/dsh-av-0.5.6.zip` 到任意目录，例如 `<某处>/dsh-av`
 2. 装那个**目录**（不是 zip）：
 
 ```
