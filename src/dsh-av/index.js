@@ -100,6 +100,45 @@ function voiceRef(name) {
   return text ? { ref, text } : null
 }
 
+/* ── 一次性合成（默认）：拉起 → 合成 → 退出，**不常驻** ──────────────────
+   慢在加载模型那 20 秒，但平时零占用。要快就把 DSH_AV_TTS_MODE 设成 server。
+   ⚠️ 这条必须 Python + torch —— 原版的全部能力（文本前端 / 多语言 / 情绪参考）都在那套里，
+      跟插件里那三个纯 JS 的 ONNX 网络不是一层，别混着讲。 */
+async function sayOneShot(text, v, output, py, dir) {
+  const script = join(import.meta.dirname, 'tools', 'tts_oneshot.py')
+  if (!existsSync(script)) return { ok: false, message: '包内缺 tools/tts_oneshot.py' }
+  if (!existsSync(py)) return { ok: false, message: '找不到 Python 运行时：' + py }
+  const { spawn } = await import('node:child_process')
+  const t0 = Date.now()
+  const res = await new Promise((resolve) => {
+    let out = '', err = ''
+    let p
+    try {
+      p = spawn(py, [script, text, v.ref, v.text, output],
+        { cwd: dir, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } })
+    } catch (e) { resolve({ code: -1, out: '', err: String((e && e.message) || e) }); return }
+    p.stdout.on('data', (d) => { out += d.toString('utf8') })
+    p.stderr.on('data', (d) => { err += d.toString('utf8') })
+    p.on('close', (code) => resolve({ code, out, err }))
+    p.on('error', (e) => resolve({ code: -1, out, err: String((e && e.message) || e) }))
+  })
+  // stdout 前面有 torch 的进度条 —— 从后往前挑第一行能解析的 JSON
+  let info = null
+  for (const line of String(res.out).split(/\r?\n/).reverse()) {
+    const s = line.trim()
+    if (s.startsWith('{') && s.endsWith('}')) { try { info = JSON.parse(s); break } catch { /* 继续找 */ } }
+  }
+  if (!info || !info.ok) {
+    return { ok: false, message: '一次性合成失败（退出码 ' + res.code + '）\n'
+      + String((info && info.error) || res.err || res.out || '').slice(-600) }
+  }
+  const vname = String(v.ref).split(/[\\/]/).slice(-2, -1)[0] || '?'
+  return { ok: true, message: `已合成：${output}\n`
+    + `${info.seconds} 秒 · ${info.sr} Hz · 音色「${vname}」\n`
+    + `耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒（其中加载模型 ${info.load_s} 秒）· **服务没有常驻**\n`
+    + '⚠️ 音色**和语气**都来自那段参考音；想换调子就换参考音，不用重训。' }
+}
+
 // ⚠️⚠️ **`@deepseek-ai/dsh-tools` 不用静态 import 了** —— 两个理由，都是血的：
 //
 //  ① 静态 import 失败 = **整个模块加载失败** = 插件 fiber 直接 failed（工具一个都不出现）。
@@ -385,6 +424,10 @@ async function boot(ctx, log) {
           if (!v.text) return { ok: false, message: '参考音缺文本（ref.txt 是空的）' }
           const output = (args && args.output) ? String(args.output)
             : join(HOME, 'say-' + Date.now() + '.wav')
+          // 默认一次性（不常驻）；DSH_AV_TTS_MODE=server 走 9880 那个常驻服务（快）
+          if ((process.env.DSH_AV_TTS_MODE || 'oneshot') === 'oneshot') {
+            return await sayOneShot(text, v, output, TTS_PY, TTS_DIR)
+          }
           const logs = []
           const up = await ensureTts(logs)
           if (!up) {
