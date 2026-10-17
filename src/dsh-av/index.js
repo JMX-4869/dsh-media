@@ -35,7 +35,7 @@
  *   音色（每个音色一份 net_g + index）在 `<数据目录>/dsh-av/voices/<名字>/`
  *   而 `<数据目录>` 默认是 `$DSH_HOME`（即 ~/.dsh），可以用环境变量 DSH_AV_HOME 改。
  */
-import { existsSync, statSync, mkdirSync, appendFileSync } from 'node:fs'
+import { existsSync, statSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import os from 'node:os'
@@ -240,6 +240,38 @@ async function boot(ctx, log) {
     + ' · register=' + typeof (tools && tools.register)
     + ' · get=' + typeof (tools && tools.get)
     + ' · schemas=' + typeof (tools && tools.schemas))
+
+  /* ── 音乐台：**跟 av 一体**的网页作曲台 ───────────────────────────────
+     它是这个插件的"输入端"：在这里写曲子、导出 WAV，再喂给 convert 换音色 / render 成片。
+     所以它属于 dsh-av 自己，不是一个单独的插件包。
+
+     路由 `/dsh-music` → 包内的 `www/音乐台.html`（零依赖单文件，97 KB）。
+     取服务一律走 `ctx.get`（见上面那段为什么），注册包在 effect 里跟着插件卸载。 */
+  const web = ctx.get ? ctx.get('webServer') : null
+  if (web && typeof web.register === 'function' && typeof effect === 'function') {
+    const htmlPath = join(import.meta.dirname, 'www', '音乐台.html')
+    effect(() => web.register({
+      kind: 'prefix',
+      path: '/dsh-music',
+      handler(req, res) {
+        try {
+          if (!existsSync(htmlPath)) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+            res.end('音乐台页面不在包里：' + htmlPath)
+            return
+          }
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(readFileSync(htmlPath, 'utf8'))
+        } catch (e) {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('读不出来：' + (e && e.message ? e.message : e))
+        }
+      },
+    }))
+    log('音乐台路由：/dsh-music → ' + htmlPath)
+  } else {
+    log('音乐台路由：**webServer 不可用**（这一页打不开；av 工具本身不受影响）')
+  }
 
   // ── 工具 ────────────────────────────────────────────────────────────
   if (tools && typeof tools.register === 'function') {

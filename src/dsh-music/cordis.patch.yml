@@ -1,4 +1,0 @@
-- insert:
-    - id: music-tab
-      name: '@local/music-tab'
-      config: {}

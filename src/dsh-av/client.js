@@ -1,13 +1,14 @@
 /**
- * @local/music-tab —— 客户端半边
+ * dsh-av —— 客户端半边（音乐台这一页）
  *
- * 注册设置页里的一页「音乐台」，内容是 iframe 指向宿主那条 /dsh-music 路由。
+ * dsh-av 是**一体**的：宿主那边是 av 工具 + /dsh-music 路由，这边是设置页里的「音乐台」。
+ * 内容是 iframe 指向 `/dsh-music` —— 音乐台是写曲子的输入端，导出的 WAV 正好喂给 av convert。
  *
  * ⚠️ 必须是 iframe，不能把 HTML 塞 innerHTML —— 按 HTML 规范，innerHTML 插进去的 <script>
  *    **不会执行**，音乐台的 AudioContext 就起不来。
  */
 window.__ModuleLoader__.load({
-  id: '@local/music-tab',
+  id: 'dsh-av',
   factory(require) {
     const React = require('react')
     const h = React.createElement

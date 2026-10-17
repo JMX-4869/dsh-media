@@ -1,17 +1,30 @@
 {
   "name": "dsh-av",
-  "version": "0.4.5",
-  "description": "DeepSeek Harness 声音与视频插件：纯 JS 的声音转换（音色转换 / 音高提取 / 音频变片子），不依赖 Python 和 torch。声音那一层用 ONNX 在 Node 里直接跑 —— hubert 提内容特征、rmvpe 提音高、net_g 合成波形；视频那一层把音频渲染成片子。",
+  "version": "0.5.0",
+  "description": "DeepSeek Harness 音视频插件（一体）：声音那一层是纯 JS 的音色转换（hubert + rmvpe + net_g 三个 ONNX 网络在 Node 里跑，不依赖 Python / torch），视频那一层把音频渲染成片；并且内置音乐台 —— 设置页里的网页作曲台，写完导出 WAV 直接喂给 convert 换音色、render 成片。",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "files": [
     "index.js",
+    "client.js",
     "voices.js",
     "convert.js",
     "wav.js",
@@ -23,7 +36,8 @@
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
-    "icon.svg"
+    "icon.svg",
+    "www/音乐台.html"
   ],
   "keywords": [
     "dsh",
@@ -31,7 +45,9 @@
     "voice",
     "onnx",
     "rvc",
-    "video"
+    "video",
+    "music",
+    "daw"
   ],
   "license": "MIT"
 }
