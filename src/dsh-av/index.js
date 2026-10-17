@@ -35,9 +35,9 @@
  *   音色（每个音色一份 net_g + index）在 `<数据目录>/dsh-av/voices/<名字>/`
  *   而 `<数据目录>` 默认是 `$DSH_HOME`（即 ~/.dsh），可以用环境变量 DSH_AV_HOME 改。
  */
-import { existsSync, statSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import os from 'node:os'
 
 // ⚠️ 目录扫描那套放在 voices.js 里，**不在这里再写一遍** ——
@@ -587,6 +587,53 @@ async function boot(ctx, log) {
           if (!v) {
             return { ok: false, message: '没找到音色「' + voice + '」。现有：'
               + (s.voices.map((x) => x.name).join(' / ') || '（一个都没有）') }
+          }
+          // ── 音色目录里放了 .pth 就走 Python 那条 ──────────────────────
+          // 为什么需要这条路：RVC 这个分支的 attentions.py 把序列长度当 python int 用
+          // （`x.view([batch, heads, int(length**2) + int(length*(length-1))])`），
+          // 导出成 ONNX 时长度被写进图里 —— 换个长度就 Reshape 失败。kizhi.onnx 是
+          // 别的工具导的所以没事，**自己训的音色导出来就跑不了**。
+          // .pth 是原样的权重，绕开导出这一层。只在音色目录里真有 .pth 时才走，
+          // 平时仍走纯 JS 的 ONNX 那条（"不开这个也行"没变）。
+          const pthName = (() => {
+            try { return readdirSync(v.dir).find((f) => f.endsWith('.pth')) || null } catch { return null }
+          })()
+          if (pthName) {
+            const py = process.env.DSH_AV_PYTHON || 'D:/RVC/.venv/Scripts/python.exe'
+            if (!existsSync(py)) {
+              return { ok: false, message: '音色「' + voice + '」里有 .pth，但没找到 Python：' + py
+                + '\n  设环境变量 DSH_AV_PYTHON 指到一个装了 torch 的 python 就行。' }
+            }
+            // 0.5.6：改用分块版。整段过一次 hubert 时注意力矩阵是 T² 的，
+            // 4 分钟的歌要 6.5 GB 内存直接炸；分块后每块只有 1000² 量级。
+            const script = fileURLToPath(new URL('./tools/convert_chunked.py', import.meta.url))
+            const rvcRoot = process.env.DSH_AV_RVC || 'D:/RVC'
+            const { spawn } = await import('node:child_process')
+            const out = await new Promise((resolve) => {
+              let buf = ''
+              let p
+              try {
+                p = spawn(py, [script, '--input', input, '--pth', join(v.dir, pthName),
+                  '--output', output, '--models', s.modelsDir, '--rvc', rvcRoot],
+                  { windowsHide: true })
+              } catch (e) {
+                return resolve('启动失败：' + String(e && e.message))
+              }
+              p.stdout.on('data', (d) => { buf += String(d) })
+              p.stderr.on('data', (d) => { buf += String(d) })
+              p.on('close', () => resolve(buf))
+              p.on('error', (e) => resolve(buf + '\n' + String(e && e.message)))
+            })
+            const last = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith('{'))
+            let j = null
+            try { j = JSON.parse(last || '') } catch { j = null }
+            if (!j || !j.ok) {
+              return { ok: false, message: '用 .pth 转换失败：'
+                + (j && j.message ? j.message : out.trim().slice(-400)) }
+            }
+            return { ok: true, message: '转换好了：' + j.out + '\n  ' + j.seconds + ' 秒 · p_len '
+              + j.p_len + ' · f0 中位 ' + j.f0_median + ' Hz\n  走的是 .pth 那条路'
+              + '（ONNX 导不出来的音色用它）' }
           }
           if (!v.preferred) return { ok: false, message: '音色「' + voice + '」里没有 .onnx' }
           const miss = missingGroups(s.models)

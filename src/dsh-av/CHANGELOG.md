@@ -1,5 +1,61 @@
 # 变更记录
 
+## 0.5.6 —— 长音频分块转换（4 分钟的歌不再爆内存）
+
+**起因**：拿一首 4 分 01 秒的歌试 `.pth` 转换，直接失败：
+
+```
+onnxruntime ... Failed to allocate memory for requested buffer of size 6955845376
+  while running MatMul node: /m/encoder/layers.0/attention/MatMul
+```
+
+**原因**：hubert 的注意力矩阵是 T² 的。23 秒的短片没问题，4 分钟 = 12000 帧 →
+单次申请 6.5 GB，必炸。这不是显存不够，是**单次申请超了**。
+
+**做法**：新增 `tools/convert_chunked.py`，按 20 秒分块、0.6 秒重叠，
+逐块转换后按重叠区线性交叉淡入拼起来。每块注意力只有 1000² 量级。
+`index.js` 的 `.pth` 分支改成调用它（短音频退化成 1 块，行为不变）。
+
+**顺带**：加了 `--key` 参数，按半音变调（音高送进声码器前乘 `2^(key/12)`，
+所以是"用这个音高重新合成"，不是事后变速，时长不变）。
+
+**实测**：4 分 01 秒 → 13 块 → 228 秒（GPU net_g + CPU hubert），比整段快且不爆。
+
+## 0.5.5 —— 音色目录里放 `.pth` 就能用（ONNX 导不出来的那些）
+
+**起因**：自己训了一个音色（gentle），导成 ONNX 后 `convert` 一跑就崩：
+
+```
+Reshape 失败：input {1,2,10820751} → requested {1,2,2327,...}
+```
+
+**原因不在导出写法，在模型代码**：这个 RVC 分支的 `infer/module/attentions.py` 里有一句
+
+```python
+x_flat = x.view([batch, heads, int(length**2) + int(length * (length - 1))])
+```
+
+`length` 是 python int —— `torch.onnx.export` 追踪时它被**折成常量写进图里**。
+kizhi.onnx 是别的工具导的（那份 attention 没这句）所以能跑；
+自己训的走这个分支就必然写死长度，**换一个音频长度就崩**。
+
+**所以加了一条路**：`convert` 现在会先看音色目录里有没有 `.pth` ——
+
+```
+有 .pth  →  spawn Python 跑 tools/convert_pth.py（直接用 .pth 权重，绕开导出）
+没 .pth  →  照旧走纯 JS 的 ONNX 那条（一点没动）
+```
+
+· Python 用环境变量 `DSH_AV_PYTHON` 指；默认 `D:/RVC/.venv/Scripts/python.exe`
+· 找不到 Python 时给一句人话，不会静默失败
+· 这条路**只在音色目录里真有 .pth 时才走** —— "不开这个也行"没变
+
+**实测**（gentle 音色，23.27 秒的人声轨）：`p_len 2326 · f0 中位 292 Hz · 23.26 秒输出`。
+
+**⚠️ 一个我自己踩的坑，记在这儿**：导出时我加了"换一个长度自检"，
+但那段替换**没生效** —— 自检日志里还是 `audio (1,1,80000)`（= 200×400，导出时的长度）。
+所以"我验过了"是假的。**自检必须真的换参数跑**，不然等于没验。
+
 ## 0.4.5 —— 外部又给了一份"人声优化方案"，逐条核过，修了它指出的两个
 
 那份方案在 `dsh-av/音视频人声优化方案.md`，**我的逐条核对写在它结尾**（"核对"那一节）。
