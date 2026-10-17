@@ -1,6 +1,6 @@
 {
   "name": "dsh-av",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "DeepSeek Harness 音视频插件（一体）：声音那一层是纯 JS 的音色转换（hubert + rmvpe + net_g 三个 ONNX 网络在 Node 里跑，不依赖 Python / torch），视频那一层把音频渲染成片；并且内置音乐台与零样本语音合成 —— 设置页里的网页作曲台，写完导出 WAV 直接喂给 convert 换音色、render 成片。",
   "type": "module",
   "main": "index.js",

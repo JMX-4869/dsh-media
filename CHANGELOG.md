@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-10-17 · 0.5.3 —— 补上 `inject` 声明（音乐台 404 的根因）
+
+重启后发现 `/dsh-music/` 是 404。查 dsh-av 自己的 `load.log`：
+
+```
+音乐台路由：**webServer 不可用**（这一页打不开；av 工具本身不受影响）
+```
+
+根因：cordis 对"没声明 inject 就去 `ctx.get`"是**直接给 null 的** —— 不报错，只是拿不到。
+dsh-av 的 `index.js` 从来没有 `export const inject`，所以 `ctx.get('webServer')` 恒为 null。
+（对比：音乐台原来那个独立包写了 `inject = ['webServer']`，所以它能注册。）
+
+修法：
+
+```js
+export const inject = ['webServer', 'tools']
+```
+
+教训：**"服务拿不到"和"服务不存在"在日志里长得一模一样** —— 先看 inject 声明，别先怀疑宿主。
+
+---
+
 ## 2026-10-17 · 0.5.2 —— 关掉常驻服务，能力一点不少
 
 **要求**：原版 GPT-SoVITS 有的要全都有；不要常驻服务；插件要小。

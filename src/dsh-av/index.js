@@ -44,6 +44,14 @@ import os from 'node:os'
 //    两处各写一份，早晚会有一处不同步（而那种 bug 很安静）。
 import { listVoices, modelStatus, ensureDirs } from './voices.js'
 
+/* ⚠️⚠️ **必须声明 inject，否则读不到服务。**
+   cordis 对"没声明就去 ctx.get"是直接给 null 的 —— 不报错，只是拿不到。
+   实测（load.log）：不写这一行，`ctx.get('webServer')` 返回 null，
+   于是 `/dsh-music` 那条路由根本没注册，页面上就是 404 —— 而日志里只有一句
+   "webServer 不可用"，很容易被当成"宿主没这个服务"。
+   `tools` 也一并声明：这才是正规写法（虽然它不声明也能拿到）。 */
+export const inject = ['webServer', 'tools']
+
 /* ══════════════════════════════════════════════════════════════════════════
    say —— 零样本语音合成（走本机的 GPT-SoVITS）
    ──────────────────────────────────────────────────────────────────────────
