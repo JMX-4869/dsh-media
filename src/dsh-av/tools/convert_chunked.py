@@ -15,7 +15,7 @@
   --key 指定升/降几个半音（默认 0）。音高在送进声码器之前乘 2^(key/12)，
   所以是"用这个音高重新合成"，不是事后变速（不会改变时长）。
 """
-import sys, io, os, time, argparse
+import sys, io, os, time, json, argparse
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
@@ -126,3 +126,11 @@ out = out / peak * 0.9
 sf.write(a.output, out, SR_OUT)
 print(f'  完成 {len(out)/SR_OUT:.2f} 秒 · {nchunk} 块 · {time.time()-t0:.0f} 秒')
 print(f'  → {a.output}')
+# 插件靠这一行判成功：index.js 取最后一条以 { 开头的行。少了它就算跑完也会报"失败"。
+print(json.dumps({
+    'ok': True,
+    'seconds': round(len(out) / SR_OUT, 2),
+    'chunks': nchunk,
+    'key': a.key,
+    'output': a.output,
+}, ensure_ascii=False))
