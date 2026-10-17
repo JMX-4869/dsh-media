@@ -28,7 +28,17 @@ p.add_argument('--rvc', required=True, help='RVC 仓库根目录')
 p.add_argument('--chunk', type=float, default=20.0)
 p.add_argument('--overlap', type=float, default=0.6)
 p.add_argument('--key', type=float, default=0.0, help='升/降半音数')
+p.add_argument('--protect', type=float, default=0.3, help='低能量帧混回原声的比例 0~1（0 关闭）')
 a = p.parse_args()
+
+# ⚠️ 必须先把所有路径转成绝对路径，再 chdir 进 RVC 仓库。
+# 否则 'demo/head30.wav' 这种相对路径会被解释成 D:\RVC\demo\...
+# → FileNotFoundError（这次自己踩了一遍，convert_pth.py 里记过同一个坑）。
+a.input = os.path.abspath(a.input)
+a.pth = os.path.abspath(a.pth)
+a.output = os.path.abspath(a.output)
+a.models = os.path.abspath(a.models)
+a.rvc = os.path.abspath(a.rvc)
 
 sys.path.insert(0, a.rvc)
 os.chdir(a.rvc)
@@ -87,7 +97,46 @@ def conv(y16):
                             torch.from_numpy(pitch).to(dev),
                             torch.from_numpy(f0)[None, :].to(dev),
                             torch.tensor([0], dtype=torch.int64).to(dev))
-    return np.nan_to_num(o[0, 0].cpu().numpy().astype(np.float32))
+    wav = np.nan_to_num(o[0, 0].cpu().numpy().astype(np.float32))
+
+    # ── 输入静音处不要出声 ────────────────────────────────────────
+    # 这是实测出来的坑：原唱开头 4 秒是空的（伴奏前奏），而模型照样"唱"，
+    # 在空白处编出一段 ~497 Hz 的啸叫（正常音高 ~320 Hz，整整高一个八度）。
+    # 做法：按输入端每帧 RMS 算一个增益包络，输入几乎没声的地方把输出压掉。
+    # 用软门限（不是一刀切），保住字头的自然起音。
+    fr = librosa.feature.rms(y=y16, frame_length=1024, hop_length=160)[0]
+    if len(fr) < p_len:
+        fr = np.pad(fr, (0, p_len - len(fr)), mode='edge')
+    fr = fr[:p_len]
+    loud = float(np.percentile(fr[fr > 0], 90)) if (fr > 0).any() else 0.0
+    thr = 10.0 ** (-70.0 / 20.0)
+    ramp = 10.0 ** (-60.0 / 20.0)
+    gate = np.clip((fr - thr) / (ramp - thr), 0.0, 1.0).astype(np.float32)
+    # CPU 域：把 gate 平滑一下，避免产生"咔哒"声
+    if len(gate) > 3:
+        k = np.ones(5, dtype=np.float32) / 5.0
+        gate = np.convolve(gate, k, mode='same')
+    # 40k 输出帧数 ≈ p_len*250，按长度重采样到输出
+    n_out = len(wav)
+    gi = np.interp(np.arange(n_out),
+                   np.linspace(0, n_out, len(gate), endpoint=False),
+                   gate).astype(np.float32)
+    wav = wav * gi
+
+    # ── ② protect：低能量帧把原声混回来 ──────────────────────────
+    # RVC 原版的 protect 参数就是干这个的：气声、弱起音、字尾这些地方，
+    # 声码器容易"发毛/发哑"，把原声按低能量权重混回去能听感自然。
+    # 这是从 convert_protect.py 搬过来的，做分块时漏掉了。
+    if a.protect > 0 and loud > 1e-6:
+        orig = librosa.resample(y16, orig_sr=SR, target_sr=SR_OUT)
+        n = min(len(wav), len(orig))
+        wlow = np.interp(np.arange(n),
+                         np.linspace(0, n, len(fr), endpoint=False),
+                         fr).astype(np.float32)
+        wlow = np.clip(1.0 - wlow / (loud * 0.5), 0.0, 1.0)
+        mixw = (a.protect * wlow).astype(np.float32)
+        wav[:n] = wav[:n] * (1.0 - mixw) + orig[:n] * mixw
+    return wav
 
 
 step = int((a.chunk - a.overlap) * SR)
