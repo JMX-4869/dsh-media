@@ -1,0 +1,33 @@
+{
+  "name": "@local/music-tab",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "description": "把音乐台（单文件 Web Audio 工作站）装成设置页里的一页；它自己有宿主路由，不依赖任何别的插件。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "www/音乐台.html"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

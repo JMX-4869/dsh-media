@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 声音（波形）+ 视频（画框）—— 两根东西并在一起 -->
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="#0f1115" stroke="#3a4250" stroke-width="2"/>
+  <g stroke="#8fd6c8" stroke-width="2.4" stroke-linecap="round">
+    <line x1="12" y1="34" x2="12" y2="30"/>
+    <line x1="17" y1="40" x2="17" y2="24"/>
+    <line x1="22" y1="45" x2="22" y2="19"/>
+    <line x1="27" y1="38" x2="27" y2="26"/>
+    <line x1="32" y1="44" x2="32" y2="20"/>
+  </g>
+  <g fill="none" stroke="#e8b56a" stroke-width="2.2">
+    <rect x="38" y="24" width="16" height="16" rx="3"/>
+    <path d="M46 28.5 l5 3.5 -5 3.5 z" fill="#e8b56a" stroke="none"/>
+  </g>
+</svg>

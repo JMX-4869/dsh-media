@@ -1,0 +1,37 @@
+{
+  "name": "dsh-av",
+  "version": "0.4.5",
+  "description": "DeepSeek Harness 声音与视频插件：纯 JS 的声音转换（音色转换 / 音高提取 / 音频变片子），不依赖 Python 和 torch。声音那一层用 ONNX 在 Node 里直接跑 —— hubert 提内容特征、rmvpe 提音高、net_g 合成波形；视频那一层把音频渲染成片子。",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "index.js",
+    "voices.js",
+    "convert.js",
+    "wav.js",
+    "png.js",
+    "render.js",
+    "mel.mjs",
+    "hubert.mjs",
+    "netg.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "icon.svg"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "voice",
+    "onnx",
+    "rvc",
+    "video"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "音乐台",
+    "description": "把单文件的 Web Audio 工作站装成设置页的一页：八条轨、钢琴卷帘、实时合成，能导出 WAV / MIDI / 采样包。"
+  }
+}

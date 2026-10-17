@@ -1,0 +1,1683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>音乐台</title>
+<style>
+  :root{
+    --bg:#0d1014; --pan:#151a21; --pan2:#1b222b; --line:#242d38;
+    --tx:#c8d4e0; --tx2:#7d8b9b; --hot:#5fd3c0; --hot2:#e8b06a; --warn:#e8695f;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--tx);
+    font:13px/1.4 'PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  /* ⚠️ 原来有 max-width:1240px —— 全屏之后内容还卡在 1240 宽，两边一大片黑，
+     所以"全屏了也没变大"。写曲子的界面不该有宽度上限。 */
+  body{padding:10px}
+  @media (min-width:1600px){body{padding:14px 20px}}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.5px}
+  h1 small{color:var(--tx2);font-weight:400;margin-left:8px;font-size:11px}
+  .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  .grow{flex:1}
+  button,select,input[type=range]{font:inherit;color:var(--tx)}
+  button{background:var(--pan2);border:1px solid var(--line);border-radius:7px;
+    padding:5px 11px;cursor:pointer;transition:.12s}
+  button:hover{border-color:#3b4a5c;background:#212a35}
+  button.on{background:var(--hot);border-color:var(--hot);color:#06231f;font-weight:600}
+  button.r.on{background:var(--warn);border-color:var(--warn);color:#2b0a07}
+  button.s.on{background:var(--hot2);border-color:var(--hot2);color:#2a1a04}
+  select{background:var(--pan2);border:1px solid var(--line);border-radius:6px;padding:4px 7px}
+  label.f{display:flex;align-items:center;gap:6px;color:var(--tx2);font-size:12px}
+  input[type=range]{-webkit-appearance:none;background:transparent;width:82px;height:16px}
+  input[type=range]::-webkit-slider-runnable-track{height:4px;background:#2b3542;border-radius:3px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;
+    border-radius:50%;background:var(--hot);margin-top:-4px;cursor:pointer}
+  /* ⚠️ 必须是 `minmax(0,1fr)` 而不是 `1fr` —— grid 子项默认 min-width:auto，
+     **不会缩到比它的内容更窄**，于是长画布把整列撑宽，滚动条永远不出现（我第一版就栽在这）。 */
+  .wrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:10px;align-items:start}
+  /* 窄屏（含设置面板）放倒右栏；中宽收窄一点右栏，别把钢琴卷帘挤没 */
+  @media (max-width:900px){.wrap{grid-template-columns:1fr}}
+  @media (min-width:901px) and (max-width:1200px){.wrap{grid-template-columns:minmax(0,1fr) 258px}}
+  .card{background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+  .card h2{font-size:12px;margin:0 0 8px;color:var(--tx2);font-weight:600;letter-spacing:.6px}
+  canvas{display:block;width:100%;height:auto;border-radius:7px;background:#0a0d11;cursor:crosshair;touch-action:none}
+  /* 长曲子：画布比容器宽 → 横向滚动。**每格永远留够可点的像素**（不然 10 分钟就是 0.53px/格）。 */
+  /* 长曲子：画布**只有屏幕那么大**，滚动范围由 .space 撑出来，.stage 粘住不跟着滚。
+     这样画布宽度永远等于视口，格子宽度 = ZOOM 常数，跟曲子多长无关 —— 也不会再撞 canvas 上限。
+     （以前是"画布按整首歌做多宽 + CSS transform 放大显示"，结果位图被放大，字全糊。） */
+  .scroller{position:relative;overflow-x:auto;overflow-y:hidden;border-radius:7px}
+  .space{height:0;width:1px}
+  .stage{position:sticky;left:0;width:100%;display:block}
+  .scroller canvas{width:auto;height:auto;max-width:none}
+  .scroller::-webkit-scrollbar{height:9px}
+  .scroller::-webkit-scrollbar-track{background:#0d1117;border-radius:9px}
+  .scroller::-webkit-scrollbar-thumb{background:#2b3542;border-radius:9px}
+  .scroller::-webkit-scrollbar-thumb:hover{background:#3b4a5c}
+  .tracks{display:flex;flex-direction:column;gap:6px;max-height:640px;overflow:auto}
+  .tr{background:var(--pan2);border:1px solid var(--line);border-radius:8px;padding:7px 8px}
+  .tr.sel{border-color:var(--hot)}
+  .tr .r1{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .tr .nm{flex:1;font-size:12px;color:var(--tx);cursor:pointer;user-select:none;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tr .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .tr .r2{display:flex;align-items:center;gap:5px;margin-top:4px}
+  /* ⚠️ 标签必须**不许收缩**：flex 子项默认 flex-shrink:1，窄栏里 26px 的标签会被压到 11px，
+     于是"音量"竖排成"音/量"两行（在设置面板里看到的就是这样）。滑杆反过来要能吃满剩余宽度。 */
+  .tr .r2 span{color:var(--tx2);font-size:11px;width:26px;flex:0 0 auto;white-space:nowrap}
+  .tr .r2 input[type=range]{flex:1 1 0;min-width:0;width:auto}
+  /* 轨道卡再紧凑点：设置面板里一行只能放得下一组控件，所以把"音量/声像"拆成两组行 */
+  .tr .r2.two{flex-wrap:wrap;row-gap:4px}
+  .tr select{flex:1;font-size:12px;padding:3px 5px}
+  .mini{padding:3px 7px;font-size:11px;border-radius:6px}
+  .hint{color:var(--tx2);font-size:11px;margin-top:7px;line-height:1.6}
+  /* 矮视口（设置面板里的 iframe 就是这种）先把说明文字收起来 —— 它有用，但占地方 */
+  @media (max-height:760px){.hint{display:none}}
+  .hint b{color:var(--tx);font-weight:600}
+  kbd{background:#222a34;border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:4px;padding:1px 5px;font:11px ui-monospace,monospace;color:var(--tx)}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>音乐台<small>单文件 · 零依赖 · 全中文</small></h1>
+  <div class="grow"></div>
+  <button id="play">▶ 播放</button>
+  <button id="stop">■ 停止</button>
+  <button id="clr">清空</button>
+  <button id="undo" disabled title="撤销（Ctrl+Z）；重做 Ctrl+Shift+Z">撤销</button>
+  <button id="fs" title="铺满窗口（Esc 退出）">⛶ 全屏</button>
+  <label class="f">速度<input type="range" id="bpm" min="50" max="180" value="96"><b id="bpmv">96</b></label>
+  <label class="f">时长<select id="mins">
+    <option value="0.5">30 秒</option><option value="1">1 分钟</option>
+    <option value="2" selected>2 分钟</option><option value="5">5 分钟</option>
+    <option value="10">10 分钟</option>
+  </select></label>
+  <!-- 新音符的默认长度 —— 不用再靠拖右边缘（那个抓取区窄起来根本点不中） -->
+  <label class="f">音符<select id="nlen">
+    <option value="1">16 分</option><option value="2" selected>8 分</option>
+    <option value="4">4 分</option><option value="8">2 分</option>
+    <option value="16">1 小节</option>
+  </select></label>
+  <span id="lenTxt" style="color:var(--tx2);font-size:11px"></span>
+  <!-- 格子宽度：长曲子要么看得全、要么看得清 —— 这个交给用户自己选，别写死 -->
+  <label class="f">缩放<select id="zoom" title="每格宽度：小=看得全，大=看得清">
+    <option value="4" title="看得全">4px</option>
+    <option value="6">6px</option>
+    <option value="9" selected>9px</option>
+    <option value="13">13px</option>
+    <option value="18">18px</option>
+    <option value="24">24px</option>
+    <option value="36" title="看得清">36px</option>
+    <option value="48">48px</option>
+    <option value="64">64px</option>
+  </select></label>
+  <label class="f">调<select id="key"></select></label>
+  <label class="f">音阶<select id="scale">
+    <option value="penta" selected>五声（好听不易错）</option>
+    <option value="minor">自然小调</option>
+    <option value="major">大调</option>
+    <option value="dorian">多利亚</option>
+    <option value="hmin">和声小调</option>
+    <option value="mmin">旋律小调</option>
+    <option value="phryg">弗里几亚</option>
+    <option value="lydian">利底亚</option>
+    <option value="mixo">混合利底亚</option>
+    <option value="whole">全音阶</option>
+    <option value="blues">布鲁斯</option>
+    <option value="miyako">都节（日本）</option>
+    <option value="spanish">西班牙</option>
+    <option value="majorP">大调五声</option>
+    <option value="chroma">十二平均（不吸附）</option>
+  </select></label>
+  <button id="exp">导出 WAV</button>
+  <button id="mid">导出 MIDI</button>
+  <button id="pack">导出采样包</button>
+  <button id="sav">导出工程</button>
+  <button id="lod">载入工程</button>
+  <input type="file" id="fjson" accept=".json" style="display:none">
+  <input type="file" id="fwav" accept="audio/*" style="display:none">
+  <button id="imp">拖入 wav 当采样</button>
+</div>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <h2 id="rollTitle">钢琴卷帘</h2>
+      <div class="scroller" id="rollWrap"><div class="space" id="rollSpace"></div><div class="stage"><canvas id="rollRuler" height="18"></canvas><canvas id="roll" width="1880" height="480"></canvas></div></div>
+    </div>
+    <div class="card">
+      <h2>步进网格（每格 = 十六分音符；点/拖 画音符）</h2>
+      <div class="scroller" id="gridWrap"><div class="space" id="gridSpace"></div><div class="stage"><canvas id="gridRuler" height="18"></canvas><canvas id="grid" width="1880" height="400"></canvas></div></div>
+      <div class="hint">
+        <b>怎么用</b>：下面选一轨 → 上面卷帘里横着是时间、竖着是音高。点一下画一个音符，拖右边缘改长度，拖身体挪位置。
+        步进网格里点格子就是"在这个时刻放一个音"（音高自动选该轨最近用过的）。
+        <br><b>换乐器</b>：在<b>右边每条轨的「音色」下拉</b>里 —— 30 种（键盘/弦乐/管乐/电声/打击/氛围），
+        最下面还有你自己录的采样。点轨道的<b>名字</b>是选中它（决定上面卷帘在编谁），点下拉是换乐器，两件事不冲突。
+        <br><b>键盘弹</b>：<kbd>A</kbd><kbd>W</kbd><kbd>S</kbd><kbd>E</kbd><kbd>D</kbd><kbd>F</kbd><kbd>T</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>H</kbd><kbd>U</kbd><kbd>J</kbd> 是十二个半音。
+        <b>插了 MIDI 键盘</b>的话直接弹就会出声。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>麦克风输入 —— 返送 / 录音</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button id="micOpen">打开麦克风</button>
+        <select id="micMode" disabled>
+          <option value="record" selected>录音模式（没耳机选这个）</option>
+          <option value="monitor">返送模式（必须耳机）</option>
+        </select>
+        <button id="mon" disabled>返送：关</button>
+        <button id="rec" disabled>● 录音</button>
+        <span id="micInfo" style="color:var(--tx2);font-size:11px"></span>
+      </div>
+      <div class="hint" id="micTip">
+        <b>两个用途要相反的参数，这是整件事的关键：</b><br>
+        · <b>返送</b>（边弹边听自己）要<b>低延迟</b> → 关掉回声消除/降噪，走近直通。
+        <b>代价：必须戴耳机</b> —— 扬声器 + 麦克风必定啸叫，这是物理，FL 也一样。<br>
+        · <b>录音</b>（弹完再听）<b>根本不在乎延迟</b> → 那就<b>开着回声消除</b>：
+        它正好能把扬声器漏进麦克风的伴奏压下去。<b>没耳机就选这个。</b><br>
+        <span style="color:var(--tx)">延迟那一侧靠 <code style="background:#222a34;padding:0 4px;border-radius:3px">latencyHint:'interactive'</code>
+        —— 本机实测 10ms，默认档是 20ms。</span>
+      </div>
+      <div class="hint" id="recList"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>轨道（点名字选中它来编；点 × 删）</h2>
+    <div class="tracks" id="tracks"></div>
+    <button id="addTr" class="mini" style="width:100%;margin-top:6px;padding:6px 8px">＋ 加一轨</button>
+    <div class="hint" id="stat"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ══════════════════════════════════════════════════════════════════════════════
+   《音乐台》—— 一个能在浏览器里作曲的小工作站。目标：**小巧如纸，但能真的写曲子**
+
+   跟 FL / LMMS 比，它没有的：实时监听（麦克风/吉他）、VST 生态、音频编辑。
+   它有的：钢琴卷帘、每轨一台合成器、混音、MIDI、导出 WAV —— 且**零依赖、无采样文件**。
+
+   全部声音都是**现算的**（Web Audio 振荡器 + 包络 + 滤波 + 噪声）。
+   这就是它能小到几十 KB 的原因 —— 一个采样文件都不带。
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 音阶 ─────────────────────────────────────────────────────────────────── */
+const KEYS = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const KEYROOT = {C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11};
+const SCALES = {
+  /* 原来的 5 个 */
+  penta:[0,3,5,7,10],            // 小调五声
+  minor:[0,2,3,5,7,8,10], major:[0,2,4,5,7,9,11],
+  dorian:[0,2,3,5,7,9,10], chroma:[0,1,2,3,4,5,6,7,8,9,10,11],
+  /* 补的：七声教会调式 + 几种常用的民族/色彩音阶。
+     ⚠️ 加音阶**不要动上面那 5 个的数组** —— 存档里的音符是按"吸附到这个音阶"存下来的，
+        改了老工程的音会跟着漂。新音阶一律往后加。 */
+  hmin:[0,2,3,5,7,8,11],         // 和声小调（升七级，那个增二度）
+  mmin:[0,2,3,5,7,9,11],         // 旋律小调（上行）
+  phryg:[0,1,3,5,7,8,10],        // 弗里几亚（降二级，西班牙味的一半）
+  lydian:[0,2,4,6,7,9,11],       // 利底亚（升四级）
+  mixo:[0,2,4,5,7,9,10],         // 混合利底亚（降七级）
+  whole:[0,2,4,6,8,10],          // **全音阶**：六个音全是大二度，德彪西那种漂浮感
+  blues:[0,3,5,6,7,10],          // 布鲁斯（小调五声 + 降五级）
+  miyako:[0,1,5,7,8],            // 都节（日本）—— 那个小二度是它的记号
+  spanish:[0,1,4,5,7,8,10],      // 西班牙（弗里几亚属音阶）
+  majorP:[0,2,4,7,9],            // 大调五声（宫商角徵羽）
+};
+/* 音高吸附到音阶：只有 snapM() 这一个实现（上面那版 keyOf 是写废的，已删 —— 留死代码
+   最坏的不是占几行，是下次我自己会以为它在用） */
+
+/* ── 乐器表：**一个引擎 + 一张表**，不是 24 个 if ────────────────────────────
+   引擎只有四块，每个乐器就是给这四块填参数 —— 所以二十几个乐器也就几 KB：
+     parts  [波形, 频率比, 音量, 失谐cent]   ← 振荡器**组**（钢琴 5 个分音、风琴 6 个）
+     noise  {level, t, f, q, a, d}           ← 噪声成分（锤击 / 吹气 / 沙沙）
+     a d s r                                 ← 振幅包络
+     f0 → f1 (fd)                            ← **滤波包络**：起音亮、稳住变暗
+     bend   [半音, 毫秒]                      ← 起音弯音（那个"咚"是从高音滑下来的）
+     vib    [Hz, cent]                       ← 颤音
+   全部现算，不带任何采样文件。 */
+const PRESETS = {
+  /* ── 键盘 ── */
+  '钢琴':    { parts:[['sine',1,1,0],['sine',2,.42,3],['sine',3,.20,-2],['sine',4,.10,4],['sine',6,.05,0]],
+              noise:{level:.10,f:3200,q:.8,d:.03}, a:.002,d:1.6,s:0,r:.35, f0:6500,f1:900,fd:.5, g:.9 },
+  '电钢':    { parts:[['sine',1,1,0],['sine',2,.30,6],['sine',3,.12,0],['sine',7,.05,0]],
+              a:.004,d:1.2,s:0,r:.5, f0:4200,f1:1400,fd:.6, vib:[4.6,6], g:.85 },
+  '风琴':    { parts:[['sine',1,1,0],['sine',2,.60,0],['sine',3,.35,0],['sine',4,.28,0],['sine',6,.16,0],['sine',8,.10,0]],
+              a:.02,d:.05,s:.85,r:.12, f0:6000, g:.7 },
+  '拨弦键琴': { parts:[['sawtooth',1,.7,4],['sawtooth',2,.3,-4]],
+              noise:{level:.14,f:4000,q:1.2,d:.02}, a:.002,d:.45,s:0,r:.2, f0:5200,f1:1600,fd:.25, g:.8 },
+  /* ── 弦乐 ── */
+  '小提琴':  { parts:[['sawtooth',1,.8,7],['sawtooth',1,.5,-7],['triangle',1,.3,0]],
+              a:.14,d:.25,s:.78,r:.3, f0:1100,f1:2400,fd:.4, vib:[5.4,16], g:.75 },
+  '大提琴':  { parts:[['sawtooth',1,.85,6],['sawtooth',1,.4,-6]],
+              a:.18,d:.3,s:.8,r:.35, f0:700,f1:1500,fd:.5, vib:[4.8,14], g:.8 },
+  '弦乐群':  { parts:[['sawtooth',1,.7,9],['sawtooth',1,.7,-9],['sawtooth',2,.25,5]],
+              a:.5,d:.4,s:.85,r:.9, f0:900,f1:1900,fd:.8, vib:[3.6,10], g:.65 },
+  '拨弦贝斯': { parts:[['triangle',1,1,0],['sawtooth',1,.35,5]],
+              noise:{level:.06,f:1500,q:1,d:.04}, a:.003,d:.5,s:.1,r:.25, f0:1800,f1:400,fd:.3, g:.95 },
+  /* ── 管乐 ── */
+  '长笛':    { parts:[['sine',1,1,0],['sine',2,.14,0]],
+              noise:{level:.06,f:5200,q:.6,a:.05,d:.12}, a:.08,d:.12,s:.8,r:.2, f0:3000,f1:4200,fd:.3, vib:[5.2,12], g:.8 },
+  '单簧管':  { parts:[['square',1,.8,0],['square',3,.25,0],['square',5,.12,0]],
+              noise:{level:.05,f:2600,q:.8,a:.04,d:.1}, a:.06,d:.15,s:.82,r:.22, f0:1500,f1:2600,fd:.35, vib:[4.4,10], g:.7 },
+  '萨克斯':  { parts:[['sawtooth',1,.8,5],['square',1,.35,-5]],
+              noise:{level:.09,f:3400,q:.9,a:.03,d:.1}, a:.05,d:.18,s:.78,r:.25, f0:1600,f1:3000,fd:.4, vib:[5.0,14], g:.72 },
+  '小号':    { parts:[['sawtooth',1,.9,4],['sawtooth',2,.3,-4]],
+              noise:{level:.10,f:4200,q:.8,a:.02,d:.08}, a:.04,d:.2,s:.8,r:.2, f0:1900,f1:3600,fd:.3, vib:[5.6,9], g:.72 },
+  /* ── 电声 ── */
+  '锯齿贝斯': { parts:[['sawtooth',1,1,0]], a:.008,d:.2,s:.7,r:.15, f0:1400,f1:320,fd:.25, g:.9 },
+  '方波主音': { parts:[['square',1,.9,0]], a:.01,d:.12,s:.75,r:.15, f0:2600,f1:1200,fd:.3, g:.75 },
+  '超锯':    { parts:[['sawtooth',1,.6,12],['sawtooth',1,.6,-12],['sawtooth',1,.5,0]],
+              a:.03,d:.25,s:.8,r:.25, f0:3200,f1:1400,fd:.4, g:.6 },
+  '电鼓':    { parts:[['sine',1,1,0]], a:.001,d:.16,s:0,r:.08, f0:900,f1:60,fd:.14, bend:[7,50], g:1 },
+  /* ── 打击 ── */
+  '底鼓':    { parts:[['sine',1,1,0]], a:.001,d:.30,s:0,r:.1, f0:800,f1:45,fd:.22, bend:[14,45], g:1.05 },
+  '军鼓':    { parts:[['triangle',1,.6,0]], noise:{level:1.0,t:'bandpass',f:1900,q:.8,d:.20},
+              a:.001,d:.20,s:0,r:.12, f0:3200,f1:700,fd:.1, g:.9 },   // 噪声层加厚（原来 .7/.16 太薄）
+  '踩镲':    { noise:{level:1.0,t:'highpass',f:6000,q:.7,d:.13}, a:.001,d:.13,s:0,r:.04, g:.7 },
+              // ⚠️ 原来 f:7000 / d:.05 / level:.8 —— 两层包络同时衰减 → 能量小到量出来只有中位的 2%
+  '嗵鼓':    { parts:[['sine',1,1,0]], noise:{level:.15,t:'lowpass',f:900,d:.05},
+              a:.001,d:.28,s:0,r:.12, f0:1200,f1:200,fd:.2, bend:[6,40], g:.95 },
+  '木鱼':    { noise:{level:1.0,t:'bandpass',f:2600,q:3,d:.07}, a:.001,d:.07,s:0,r:.04, g:.85 },
+              // ⚠️ 原来 q:6（太窄，只过一点点能量）+ d:.035 → 量出来是中位的 1.4%
+  /* ── 氛围 / 铃 ── */
+  '铃':      { parts:[['sine',1,1,0],['sine',2.76,.25,0],['sine',5.4,.12,0]],
+              a:.002,d:1.8,s:0,r:.7, f0:9000,f1:3000,fd:.8, g:.85 },
+  '钟':      { parts:[['sine',1,1,0],['sine',2.01,.5,0],['sine',2.98,.3,0],['sine',4.1,.2,0],['sine',5.43,.12,0]],
+              a:.002,d:3.4,s:0,r:1.2, f0:7000,f1:2200,fd:1.4, g:.7 },
+  '铺底':    { parts:[['sawtooth',1,.6,8],['sawtooth',1,.6,-8],['sine',2,.2,0]],
+              a:.6,d:.5,s:.85,r:1.0, f0:1200,f1:1800,fd:1.2, g:.6 },
+  '空气声':  { noise:{level:.35,t:'bandpass',f:3000,q:.5,a:.5,d:1.2},
+              a:.3,d:.4,s:.5,r:.8, f0:2400,f1:3600,fd:.8, g:.55 },
+  /* ── 人声（共振峰合成）—— 这三个是"能唱"的音色，别的都是乐器 ────────────────
+     原理：锯齿当声带（谐波要够密），三个并联带通负责把谐波"染"成元音。
+     所以 **必须用锯齿**，换成正弦就一个峰都起不来（正弦只有一个谐波，没东西可滤）。
+     颤音迟一点进（a 长）才像唱的，一开口就抖的是机器。
+     ⚠️ **音域限制（实测）**：差分测量（开/关共振峰，看比值曲线在哪鼓起来）
+         A2(110Hz) 3/3 个共振峰都命中（860Hz 处 5.4×）· A3 2/3 · A4 2/3。
+         原因：共振峰要有谐波落进它的带宽里才响得起来。A4 上谐波间隔 440Hz，
+         比 F2 的带宽(122Hz)还宽 —— 带里一个谐波都没有，那个峰就哑了。
+         **放宽 Q 不管用**（实测 vq 0.7/0.5/0.35 都让命中数下降），所以别调 Q。
+         → 想听清元音，写 **A2~A3 (110~220Hz)** 那一带；高音区它会退化成"啊"的模糊版。 */
+  '人声·啊': { vow:'a', parts:[['sawtooth',1,.5,0],['sawtooth',1,.45,6]],
+              a:.06,d:.12,s:.85,r:.14, f0:9000,f1:12000,fd:.3, vib:[5.2,22], g:1.1 },
+  '人声·哦': { vow:'o', parts:[['sawtooth',1,.5,0],['sawtooth',1,.45,6]],
+              a:.06,d:.12,s:.85,r:.14, f0:9000,f1:12000,fd:.3, vib:[5.0,20], g:1.1 },
+  '人声·乌': { vow:'u', parts:[['sawtooth',1,.5,0],['sawtooth',1,.45,6]],
+              a:.08,d:.12,s:.85,r:.16, f0:9000,f1:11000,fd:.3, vib:[4.8,18], g:1.2 },
+};
+/* ── **响度校准**（这次补的 —— 也是行业做法：音色库出厂前都做过 pre-gain） ──────────
+   ⚠️ 我第一版给 30 个乐器写完参数就完事，**从来没量过它们各自多大声**。
+   量完（同样力度 t=60、vol=1、无母带增益）：中位 .293、最响「铺底」.668、最轻「木鱼」.0036
+   —— **极差 188 倍**。踩镲只有中位的 2%：不是混音把它埋了，**是它本身就小两个数量级**。
+   下面是量到的值，按 0.30 归一到 g；上限 8 倍 —— 超过上限说明**音色本身太薄**，
+   要先改音色（踩镲/木鱼/军鼓就是，见它们各自的注释）。 */
+const CAL = { '钢琴':.409,'电钢':.450,'风琴':.398,'拨弦键琴':.148,'小提琴':.180,'大提琴':.184,
+  '弦乐群':.181,'拨弦贝斯':.399,'长笛':.345,'单簧管':.323,'萨克斯':.225,'小号':.200,
+  '锯齿贝斯':.234,'方波主音':.293,'超锯':.186,'电鼓':.185,'底鼓':.234,'军鼓':.065,
+  '踩镲':.006,'嗵鼓':.215,'木鱼':.004,'铃':.419,'钟':.654,'铺底':.668,'空气声':.594 };
+for (const [n, rms] of Object.entries(CAL)) {
+  const p = PRESETS[n];
+  // ⚠️ 量到的 rms **已经包含当时那个 g**（钢琴 .9、铺底 .6…），所以要乘回去再除 ——
+  //    我第一版写的是 `0.30/rms`，那等于把旧 g 抹了重算（错）。正确：g_new = 目标 × g_old / rms
+  if (p) p.g = +Math.min(8, (0.30 / rms) * (p.g == null ? 1 : p.g)).toFixed(3);
+}
+const ALIASES = new Set();
+for (const [old, now] of [['打','底鼓'],['金属','踩镲'],['低音','锯齿贝斯'],['垫','铺底'],['唱','小提琴']]) {
+  PRESETS[old] = PRESETS[now];
+  ALIASES.add(old);
+}
+
+/* ── 采样：录到的、拖进来的，都变成一种**音色**（而不是把地基挖掉） ───────────
+   ⚠️ 上一版「拖 wav 当采样」是假的：它把 noiseBuf 换掉了 —— 而 noiseBuf 是**鼓和金属音色的
+   噪声源**。拖一个 wav 进来，鼓就变成那个 wav 了。那不是采样器，那是把地基挖了。
+   现在：采样进 SAMPLES 表，成为一个可选的音色；鼓的噪声源不动。
+   音高：音符 m 决定播放速率（2^((m-root)/12)）—— 想原速就把音放在 root 那个音上（默认 C4）。
+
+   ⚠️ **还有个大洞（这次补的）**：音频只活在内存里。工程 JSON 里写着「这条轨用采样:录音1」，
+   而关掉浏览器之后**那个采样不存在了** —— 载入工程，那条轨直接哑掉。
+   塞进 JSON 不行（base64 会把工程撑成几十 MB），所以走 **IndexedDB**：
+   **音频留在浏览器里，工程里只留名字，两边合起来才是完整的。** */
+const SAMPLES = new Map();                      // 名字 → { buf（可能还没造出来）, rec, root }
+const SP = '采样:';
+
+function idb() {                                // 懒开：一次连接，反复用
+  if (!idb.p) idb.p = new Promise((res, rej) => {
+    const r = indexedDB.open('音乐台', 1);
+    r.onupgradeneeded = () => {                       // 第一次打开时才建表
+      if (!r.result.objectStoreNames.contains('samples')) r.result.createObjectStore('samples');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return idb.p;
+}
+function idbDo(mode, fn) {
+  return idb().then(db => new Promise((res, rej) => {
+    const t = db.transaction('samples', mode);
+    const q = fn(t.objectStore('samples'));
+    t.oncomplete = () => res(q ? q.result : undefined);
+    t.onerror = () => rej(t.error);
+  }));
+}
+/* AudioBuffer 不能被结构化克隆（它是 Web Audio 对象），但 Float32Array 可以 ——
+   所以存**通道数据 + 元信息**，要用的时候再造回 AudioBuffer。 */
+function recOf(name, buf, root) {
+  return { name, root: root == null ? 60 : root, length: buf.length, sampleRate: buf.sampleRate,
+           ch: Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c).slice()) };
+}
+function bufFromRec(rec, ctx) {                  // 用**调用方自己的 context** 造，别去问活的 ac
+  const c = ctx || ac;                           // （导出走的是离线 context —— 问 ac 会拿到 null → 采样静音）
+  if (!c || !rec) return null;
+  const b = c.createBuffer(rec.ch.length, rec.length, rec.sampleRate);
+  rec.ch.forEach((d, i) => b.copyToChannel(d, i));
+  return b;
+}
+function addSample(name, buf, root) {
+  let n = String(name).slice(0, 10) || '素材', i = 2;
+  while (SAMPLES.has(n)) n = String(name).slice(0, 8) + (i++);
+  const rec = recOf(n, buf, root);
+  SAMPLES.set(n, { buf, rec, root: rec.root });
+  idbDo('readwrite', s => s.put(rec, n)).catch(() => { });   // 存不进去也不该挡住你用
+  return n;
+}
+
+/* ── 工程数据 ─────────────────────────────────────────────────────────────── */
+/* **轨道数是数组自己的长度，不是一个写死的常量。**
+   （第一版写死 `NTR = 8`，那个常量后来咬了我一口：`schedule` 收了 trs 参数却去读它，
+     给它 24 条轨就崩。拔掉之后，"能不能新建轨道"也顺手解决了 —— 它本来就不该是常量。）*/
+const DEFAULT_TRACKS = [
+  ['鼓','打',.9], ['低音','低音',.8], ['和弦','垫',.7], ['主旋律','唱',.85],
+  ['铺底','垫',.6], ['点缀','铃',.7], ['打击2','金属',.7], ['空','铃',.7],
+];
+const P = {
+  bpm:96, bars:2, key:'A', scale:'penta', sel:3,
+  tracks:[],
+};
+function newTrack(name, preset, vol) {
+  return { name: name || '新轨', preset: preset || '钢琴', vol: vol == null ? .75 : vol,
+           pan: 0, mute: false, solo: false, send: .18, notes: [], lastM: 60 };
+}
+for (const [n, pr, v] of DEFAULT_TRACKS) P.tracks.push(newTrack(n, pr, v));
+
+const stepsTotal = () => P.bars * 16;
+const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+
+/* ── 一个音（活的 ac 和离线的 oac 都能跑 —— 同一段代码） ─────────────────── */
+let noiseBuf = null;
+function makeNoise(c) {
+  const n = Math.floor(c.sampleRate * 1.2);
+  const b = c.createBuffer(1, n, c.sampleRate);
+  const d = b.getChannelData(0);
+  let s = 1234567;
+  for (let i = 0; i < n; i++) { s = (s * 1103515245 + 12345) & 0x7fffffff; d[i] = (s / 0x3fffffff) - 1; }
+  return b;
+}
+function playNote(c, dest, noise, t, midi, dur, vel, tr) {
+  const p = PRESETS[tr.preset] || PRESETS['铃'];
+  const out = c.createGain(); out.gain.value = vel * (p.g == null ? 1 : p.g);   // g = 各乐器响度补偿
+  const pan = c.createStereoPanner(); pan.pan.value = tr.pan;
+  out.connect(pan); pan.connect(dest);
+  const durS = Math.max(0.05, dur);
+
+  if (String(tr.preset).startsWith(SP)) {         // 采样音色：播那段素材，音高决定速率
+    const s = SAMPLES.get(tr.preset.slice(SP.length));
+    if (!s) return;
+    const b = s.buf || bufFromRec(s.rec, c);      // 从 IndexedDB 读回来的只是"记录"，现造 AudioBuffer
+    if (!b) return;                                // 还造不出来（ac 未就绪）就静音，别报错
+    if (!s.buf) s.buf = b;                         // 造一次就缓存
+    const src = c.createBufferSource();
+    src.buffer = b;
+    src.playbackRate.value = Math.pow(2, (midi - s.root) / 12);
+    const g = c.createGain(); g.gain.value = vel;
+    src.connect(g); g.connect(out);
+    src.start(t);                                  // 整段播完（不截断）
+    return;
+  }
+
+  /* ── 引擎：只有四块。乐器 = 给这四块填参数 ──────────────────────────────── */
+  /* ① 滤波包络：起音亮 → 稳住变暗（以前截止是死的，所以锯弦听着假） */
+  const f0 = p.f0 == null ? 8000 : p.f0;
+  const fd = p.fd == null ? (p.d || .1) : p.fd;
+  const lp = c.createBiquadFilter();
+  lp.type = p.ft || 'lowpass';
+  lp.Q.value = p.fq == null ? 1 : p.fq;
+  lp.frequency.setValueAtTime(f0, t);
+  if (p.f1) lp.frequency.exponentialRampToValueAtTime(Math.max(50, p.f1), t + fd);
+
+  /* ② 振幅包络 */
+  const g = c.createGain();
+  const a = p.a == null ? .005 : p.a, d = p.d == null ? .2 : p.d;
+  const sus = p.s == null ? 0 : p.s, r = p.r == null ? .2 : p.r;
+  const hold = Math.max(a + d, durS);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(1, t + a);
+  g.gain.linearRampToValueAtTime(sus, t + a + d);
+  g.gain.setValueAtTime(sus, t + hold);
+  g.gain.linearRampToValueAtTime(0, t + hold + r);
+  /* ②' 共振峰 —— 三个并联带通把锯齿"唱"成元音。元音 = 三个峰的位置，不是音色。
+     ⚠️ 必须接在 lp **之后**、g **之前**：接在 g 后面包络就管不住它；接在 lp 前面，
+        高次谐波先被削掉 —— 而共振峰靠的正是那些谐波，削完就唱不出来了。
+     （参数来自那页《无词合唱》：女声 a=[850,1220,2810] o=[560,900,2830] u=[370,950,2670]） */
+  let preG = lp;
+  if (p.vow) {
+    const FV = { a:[850,1220,2810], o:[560,900,2830], u:[370,950,2670],
+                 e:[600,1800,2600], i:[310,2200,2900] };
+    const fm = FV[p.vow] || FV.a;
+    const sumg = c.createGain(); sumg.gain.value = 1.5;
+    /* ⚠️ 三个峰的增益不能照"理论上该多响"给（1 : .55 : .3）——
+       锯齿的谐波按 1/f 往下掉，越高的峰拿到的能量越少。实测 F1 是 F3 的 18 倍，
+       峰上/峰外只有 2.3×（对照 1.07×）。所以按频率补偿：vg 默认 [1,.55,.3]×f/f1。 */
+    const vg = p.vg || [1, .55 * (fm[1] / fm[0]), .3 * (fm[2] / fm[0])];
+    for (let i = 0; i < 3; i++) {
+      const b = c.createBiquadFilter();
+      b.type = 'bandpass';
+      b.frequency.value = fm[i];
+      b.Q.value = [8, 10, 12][i] * (p.vq || 1);     // vq>1 更尖（更像唱），<1 更糊
+      const bg = c.createGain(); bg.gain.value = vg[i];
+      lp.connect(b); b.connect(bg); bg.connect(sumg);
+    }
+    preG = sumg;
+  }
+  preG.connect(g); g.connect(out);
+  const stopAt = t + hold + r + .35;
+
+  /* ③ 振荡器**组** —— 每个分音有自己的波形/频率比/音量/失谐。
+     ⚠️ 没写 parts 时：有噪声的就**不要振荡器**（踩镲、空气声是纯噪声；硬塞一个正弦进去就毁了）。 */
+  const parts = p.parts || (p.noise ? [] : [['sine', 1, 1, 0]]);
+  const oscs = [];
+  for (const [wave, ratio, level, det] of parts) {
+    const o = c.createOscillator();
+    o.type = wave;
+    o.frequency.value = hz(midi) * ratio;
+    o.detune.value = det || 0;
+    if (p.bend) {                                  // ④ 起音弯音：从 +N 半音滑下来 —— 底鼓那个"咚"
+      o.frequency.setValueAtTime(hz(midi) * ratio * Math.pow(2, p.bend[0] / 12), t);
+      o.frequency.exponentialRampToValueAtTime(hz(midi) * ratio, t + (p.bend[1] || 60) / 1000);
+    }
+    if (level === 1) o.connect(lp);
+    else { const lv = c.createGain(); lv.gain.value = level; o.connect(lv); lv.connect(lp); }
+    o.start(t); o.stop(stopAt);
+    oscs.push(o);
+  }
+  if (p.vib && oscs.length) {                      // 颤音按 cent 给（跟音高无关，所以高低音一致）
+    const lfo = c.createOscillator(), lg = c.createGain();
+    lfo.frequency.value = p.vib[0];
+    lg.gain.value = hz(midi) * (Math.pow(2, p.vib[1] / 1200) - 1);
+    lfo.connect(lg);
+    for (const o of oscs) lg.connect(o.frequency);
+    lfo.start(t); lfo.stop(stopAt);
+  }
+  /* ⑤ 噪声成分：锤击 / 吹气 / 沙沙 —— 自己一套快包络，**挂在振幅包络之后**（不然会被压扁） */
+  if (p.noise && noise) {
+    const nz = p.noise;
+    const s1 = c.createBufferSource(); s1.buffer = noise; s1.loop = true;
+    const nf = c.createBiquadFilter();
+    nf.type = nz.t || 'bandpass';
+    nf.frequency.value = nz.f || 2000;
+    nf.Q.value = nz.q == null ? 1 : nz.q;
+    const ng = c.createGain();
+    const na = nz.a == null ? .003 : nz.a, nd = nz.d == null ? .08 : nz.d;
+    ng.gain.setValueAtTime(0, t);
+    ng.gain.linearRampToValueAtTime(nz.level == null ? .3 : nz.level, t + na);
+    ng.gain.exponentialRampToValueAtTime(.0004, t + na + nd);
+    s1.connect(nf); nf.connect(ng); ng.connect(out);
+    s1.start(t); s1.stop(t + na + nd + .05);
+  }
+}
+
+/* ── 调度：向前看一小段，把音符排进去（Web Audio 的标准做法） ───────────── */
+/* ⚠️ `until` 是**渲染窗口的上界**：窗口之后的音符**根本不建节点**。
+   没有这一条，分段渲染会比不分段还慢 —— 因为每一段都会把整首 1608 个音符都建一遍
+   （实测撞到：288 秒的曲子分 12 段，50 秒过去第一段还停在 0%）。 */
+function schedule(ctx, dest, noise, t0, trs, until) {
+  const spb = 60 / P.bpm / 4;                     // 一个十六分音符多长
+  const total = stepsTotal();
+  let count = 0;
+  /* ⚠️ 括号不能省：`rep < P.reps || 1` 在 P.reps 是 undefined 时 **恒为真 → 死循环**，
+     整个标签页会挂死（我三次"浏览器卡住"就是这一行）。导出路径里 P.reps 有值，
+     所以从界面走永远撞不到 —— 直到有人直接调 schedule。**会挂死别人的默认值，不能留。** */
+  for (let rep = 0; rep < (P.reps || 1); rep++) {
+    for (let i = 0; i < trs.length; i++) {        // 用**它收到的那个数组**，别去读全局 NTR（隐藏耦合）
+      const tr = trs[i];
+      if (tr.mute) continue;
+      if (trs.some(x => x.solo) && !tr.solo) continue;
+      for (const nt of tr.notes) {
+        if (nt.s >= total) continue;
+        const at = t0 + (rep * total + nt.s) * spb;
+        /* ⚠️ **负时间是错的** —— Web Audio 的 `setValueAtTime` 不收负的 startTime
+           （实测：只有 from=0 的第一段能过，之后每段都抛 "Time must be a finite number"）。
+           所以这里过滤的是 `at < 0`：这一段的渲染起点之前的音不建节点。
+           跨段的长音尾巴由 PRE 兜住 —— 段起点前 PRE 秒内开始的音会落在**被丢掉的那一截**里起音，
+           尾巴正好响进保留的部分（PRE 3.4 秒 > 最长音符 3.0 秒，所以不会漏）。 */
+        if (at < 0) continue;
+        if (until != null && at > until) continue; // **窗口之后：不建节点**
+        playNote(ctx, dest, noise, at, nt.m, nt.l * spb, nt.v * tr.vol, tr);
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/* ═══ 实时播放 ═══ */
+/* ⚠️ **母带余量**。原来写的是 master .8 + 压缩器 threshold -8 / ratio 8，结果两件事：
+   ① 6 条轨一起响时**峰值顶到 1.000（削波）** —— 因为 `DynamicsCompressorNode` **不是 limiter**：
+      它有 3ms 的 attack，**瞬态峰值会从它前面穿过去**（W3C 音频邮件列表和一堆实现都在说这个）。
+   ② 那个压缩器在**把整首压平** —— threshold -8dB 意味着超过 0.4 的一切都被 8:1 压扁，
+      所以我"导出后每小节一样响"有一部分是**我自己压出来的**。
+   改法：**余量留给它自己，压缩器只当保险** —— master 降到 .58，阈值抬到 -3、比率 4。
+   （更彻底的做法是 lookahead true-peak limiter，但那要 AudioWorklet，对 56KB 的目标不划算。） */
+const MASTER = .58, LIM_T = -3, LIM_R = 4;
+/* **软削波（tanh）—— 压不住的那一下交给它。**
+   `DynamicsCompressorNode` 有 3ms 的 attack，鼓的瞬态从它前面穿过去（我实测：6 条轨全奏时
+   峰值冲到 +3.5 dBFS）。而 `WaveShaperNode` **零延迟、没有 attack** —— 大的折不弯，小的原样过。
+   这就是"没有 lookahead limiter 时"的现成替代品，不用 AudioWorklet。 */
+const softCurve = (() => {
+  const n = 1024, c = new Float32Array(n), k = 2.2, norm = Math.tanh(k), CEIL = .9;
+  /* ⚠️ 端点归一化到 **0.9 而不是 1.0**：tanh 的输出本来有界，但"贴在 1.000"等于没有余量。
+     留 0.9 → 永远顶不到天花板。 */
+  for (let i = 0; i < n; i++) c[i] = (Math.tanh(k * ((i / (n - 1)) * 2 - 1)) / norm) * CEIL;
+  return c;
+})();
+function addSoftClip(ctx, from) {
+  const ws = ctx.createWaveShaper();
+  ws.curve = softCurve;
+  /* ⚠️ **不要开 oversample。** 实测对照：'4x' → 1.2272、'2x' → 1.2362（超过 1 的样本各 ~200 个），
+     而 'none' → **1.0000 且 0 个过冲**。原因是重采样滤波器的阶跃响应本身就过冲，
+     把已经限到 1.000 的信号又抬回去。代价：tanh 的谐波会轻微折回（一点毛刺）——
+     但那是"稍微不好听"，过冲是"一定削波"，选前者。 */
+  ws.oversample = 'none';
+  from.connect(ws);
+  return ws;
+}
+let ac = null, noise = null, bus = null, dlySend = null, master = null;
+let playing = false, raf = 0, stepIdx = 0, nextT = 0, timer = 0;
+const LOOKAHEAD = 0.14, TICKMS = 25;
+
+function ensureAudio() {
+  if (ac) return;
+  ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  /* ⚠️ 这个 latencyHint 是我**量过才加的**：本机 interactive=10.0ms、balanced=10.0ms、playback=20.0ms。
+     差了整整一倍。我上一版量完就忘了写进代码 —— 量了不用等于没量。 */
+  noise = makeNoise(ac);
+  master = ac.createGain(); master.gain.value = MASTER;
+  const lim = ac.createDynamicsCompressor();
+  lim.threshold.value = LIM_T; lim.ratio.value = LIM_R;
+  master.connect(lim);
+  addSoftClip(ac, lim).connect(ac.destination);      // 压缩器之后再垫一层软削波
+  bus = ac.createGain(); bus.connect(master);
+  // 一条延迟总线，每轨有发送量
+  const d = ac.createDelay(1); d.delayTime.value = .30;
+  const fb = ac.createGain(); fb.gain.value = .30;
+  const wet = ac.createGain(); wet.gain.value = .5;
+  dlySend = ac.createGain(); dlySend.gain.value = 1;
+  dlySend.connect(d); d.connect(fb); fb.connect(d); d.connect(wet); wet.connect(master);
+}
+function stopAll() {
+  playing = false; clearInterval(timer); timer = 0;
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0; drawAll();
+  if (ac) { const n = ac.currentTime; master.gain.cancelScheduledValues(n); master.gain.setValueAtTime(master.gain.value, n);
+    master.gain.linearRampToValueAtTime(0, n + .06);
+    setTimeout(() => { if (ac && !playing) { master.gain.cancelScheduledValues(ac.currentTime); master.gain.setValueAtTime(MASTER, ac.currentTime); } }, 120); }
+}
+function startPlay() {
+  ensureAudio(); if (ac.state === 'suspended') ac.resume();
+  const n = ac.currentTime; master.gain.cancelScheduledValues(n); master.gain.setValueAtTime(MASTER, n);
+  playing = true; stepIdx = 0; nextT = n + .08;
+  const spb = 60 / P.bpm / 4, total = stepsTotal();
+  let started = new Set();
+  timer = setInterval(() => {
+    while (nextT < ac.currentTime + LOOKAHEAD) {
+      const si = stepIdx % total, rep = Math.floor(stepIdx / total);
+      for (let i = 0; i < P.tracks.length; i++) {
+        const tr = P.tracks[i];
+        if (tr.mute) continue;
+        if (P.tracks.some(x => x.solo) && !tr.solo) continue;
+        for (const nt of tr.notes) {
+          if (nt.s !== si) continue;
+          playNote(ac, bus, noise, nextT, nt.m, nt.l * spb, nt.v * tr.vol, tr);
+          const key = i + ':' + si;
+          if (!started.has(key)) { started.add(key); flash(i, si); }
+        }
+      }
+      nextT += spb; stepIdx++;
+    }
+  }, TICKMS);
+  const loop = () => { if (!playing) return; drawAll(); raf = requestAnimationFrame(loop); };
+  raf = requestAnimationFrame(loop);
+}
+
+/* ── 键盘 / MIDI 弹奏 ─────────────────────────────────────────────────────── */
+const KBD = {a:0,w:1,s:2,e:3,d:4,f:5,t:6,g:7,y:8,h:9,u:10,j:11,k:12,o:13,l:14,p:15,';':16};
+function playLive(midi) {
+  ensureAudio();
+  const tr = P.tracks[P.sel] || P.tracks[0];
+  if (ac.state === 'suspended') ac.resume();
+  playNote(ac, bus, noise, ac.currentTime + .01, midi, .35, .9, tr);
+  tr.lastM = midi;
+}
+addEventListener('keydown', e => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/input|select|textarea/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(); if (!(k in KBD)) return;
+  e.preventDefault();
+  playLive(rootMidi() + KBD[k]);
+});
+const rootMidi = () => 48 + KEYROOT[P.key] + 12 + (P.scale === 'penta' ? 0 : 0);
+
+/* ═══ 界面 ═══ */
+const $ = id => document.getElementById(id);
+const roll = $('roll'), gctx = roll.getContext('2d');
+const grid = $('grid'), sx = grid.getContext('2d');
+let flashCell = null;                            // 播放时闪的格子
+
+function flash(i, s) { flashCell = { i, s, t: performance.now() }; }
+
+/* 卷帘几何 */
+const ROLL_ROWS = 25;                            // 显示 25 个半音
+const rowOf = (m) => m - rollBase();
+/* ⚠️ 卷帘的最低音**跟着选中轨走**，不是写死的。
+   第一版写死 A3(57)：低音轨在 A2(45) 附近 —— **选中低音轨，卷帘里一个音符都看不见**
+   （探针量的："低音:0 行"）。同一份数据，视野不对就等于没有。 */
+function rollBase() {
+  const tr = P.tracks[P.sel];
+  if (tr && tr.notes.length) {
+    let lo = 999, hi = -999;
+    for (const n of tr.notes) { if (n.m < lo) lo = n.m; if (n.m > hi) hi = n.m; }
+    /* ⚠️ 以前**每次调用都重算** —— 于是"在网格里加一个低音，整个卷帘就跳一下"，
+       看起来像音符凭空消失（其实只是视野跑了）。现在只在**切轨**时取景，
+       加音符 / 改音符一律不动视野；想看视野外的音就**用滚轮上下翻**（见 scrollPitch）。 */
+    if (rollBaseM === null || rollBaseFor !== P.sel) {
+      const span = Math.max(16, hi - lo + 5);
+      rollBaseM = Math.round(lo - (span - (hi - lo)) / 2 - 1);
+      rollBaseFor = P.sel;
+    }
+    return rollBaseM;
+  }
+  rollBaseM = null; rollBaseFor = -1;
+  return 48 + KEYROOT[P.key];
+}
+let rollBaseM = null, rollBaseFor = -1;
+
+/** 当前轨音符的音高范围 + 视野能停的上下界 */
+function pitchRange() {
+  const tr = P.tracks[P.sel];
+  let lo = 999, hi = -999;
+  if (tr) for (const n of tr.notes) { if (n.m < lo) lo = n.m; if (n.m > hi) hi = n.m; }
+  if (lo === 999) { lo = 48; hi = 62; }
+  const top = hi - ROLL_ROWS + 1;                       // 让最高音刚好在顶上的那个 base
+  return {
+    lo, hi,
+    lowBase: Math.min(top, lo) - 2,
+    highBase: Math.max(top, lo) + 2,
+  };
+}
+/** 上下翻音高视野（滚轮 / 键盘）。**只动视野，不动音符。** */
+function scrollPitch(dRows) {
+  const r = pitchRange();
+  const cur = rollBaseM === null ? rollBase() : rollBaseM;
+  const next = Math.max(r.lowBase, Math.min(r.highBase, cur + dRows));
+  if (next === cur) return;
+  rollBaseM = next; rollBaseFor = P.sel;
+  refresh();
+}
+function isBlack(m) { return [1,3,6,8,10].includes(((m % 12) + 12) % 12); }
+
+/* 画布宽度跟着步数长 —— **每格永远留够可点的像素**。
+   （10 分钟 @88BPM = 3520 步；硬塞进 1880px 就是每格 0.53px，谁都点不中。
+     所以宁可画布变成两万像素宽、让外层滚动，也不要压缩格子。） */
+/* 每格宽度（顶栏「缩放」）。**视口渲染下它就是屏幕像素**，不再受画布上限约束。
+   （旧做法是"画布按整首歌做多宽、再用 CSS transform 放大显示" —— 位图被放大，字全糊。） */
+let ZOOM = 9;
+
+/** 画布按**视口**定宽；滚动范围交给 .space 撑；文字按屏幕分辨率画，不用反缩放 */
+function fitW(cv, kw, total) {
+  const wrap = cv.closest('.scroller');
+  if (!wrap) return;
+  const vw = Math.max(240, Math.round(wrap.clientWidth));
+  if (cv.width !== vw) cv.width = vw;             // 改 width 会清空画布 —— 每帧重画，无所谓
+  cv.style.width = vw + 'px';
+  const sp = wrap.querySelector('.space');
+  if (sp) sp.style.width = Math.round(kw + total * ZOOM) + 'px';
+}
+/** 当前横向滚动量（画布坐标里要往左偏这么多） */
+function scrollXOf(wrap) { return wrap ? Math.round(wrap.scrollLeft) : 0; }
+/* 播放头跑到哪儿，滚动条跟到哪儿 —— 不然长曲子播到后面你就看不见了 */
+function follow(wrapId, cv, xSong) {
+  const wrap = $(wrapId);
+  if (!wrap) return;
+  /* 视口渲染下画布坐标就是屏幕像素（1:1），不用再按比例换算 */
+  if (xSong < wrap.scrollLeft + 60 || xSong > wrap.scrollLeft + wrap.clientWidth - 60)
+    wrap.scrollLeft = Math.max(0, xSong - wrap.clientWidth / 2);
+}
+/* **标尺**：画在主画布上方的一张独立 canvas 里，跟主画布在**同一个滚动容器**内。
+   所以横向滚动天然同步，不用写任何 onscroll。刻度是"第几小节"：每小节一根短线，
+   隔几小节标一次数字（间距不够就自动放宽到 2/4/8 小节一标）。 */
+function drawRuler(cv, kw, total) {
+  fitW(cv, kw, total);
+  const c = cv.getContext('2d'), H = cv.height, W = cv.width;
+  const sx = scrollXOf(cv.closest('.scroller'));
+  c.clearRect(0, 0, W, H);
+  c.fillStyle = '#0a0d11'; c.fillRect(0, 0, W, H);
+  const bars = Math.max(1, Math.floor(total / 16));
+  const cw = ZOOM;
+  let every = 1;
+  while (every * 16 * cw < 34) every *= 2;
+  c.textBaseline = 'middle'; c.font = '10px system-ui,sans-serif';
+  c.save(); c.translate(-sx, 0);
+  for (let b = 0; b <= bars; b++) {
+    const x = kw + b * 16 * cw, major = b % every === 0;
+    c.fillStyle = major ? '#7f8fa3' : '#33404d';
+    c.fillRect(x, major ? 3 : 8, 1, major ? 13 : 7);
+    if (major && b < bars) { c.fillStyle = '#7f8fa3'; c.fillText(String(b + 1), x + 3, 10); }
+  }
+  c.restore();
+  c.fillStyle = '#0a0d11'; c.fillRect(0, 0, kw, H);   // 左侧"小节"标签粘住
+  c.fillStyle = '#4d5a68'; c.fillText('小节', 4, 10);
+}
+
+function drawRoll() {
+  const total = stepsTotal();
+  fitW(roll, 46, total);
+  drawRuler($('rollRuler'), 46, total);
+  const kw = 46, cw = ZOOM, gw = total * ZOOM;
+  /* 行高：跟格子宽度走（1.5 倍，块接近方形），同时受**视口高度**约束 ——
+     设置面板里的 iframe 只有四五百像素高，卷帘不能吃掉半个面板。 */
+  const vCap = Math.max(6, (window.innerHeight * 0.32) / ROLL_ROWS);
+  const rh0 = Math.min(vCap, Math.max(10, Math.min(20, cw * 1.5)));
+  const hNeed = Math.round(ROLL_ROWS * rh0);
+  if (roll.height !== hNeed) roll.height = hNeed;
+  const w = roll.width, h = roll.height, tr = P.tracks[P.sel];
+  const rx = scrollXOf($('rollWrap'));
+  gctx.clearRect(0, 0, w, h);
+  const rh = h / ROLL_ROWS;
+  gctx.save(); gctx.translate(-rx, 0);
+  // 行底
+  for (let r = 0; r < ROLL_ROWS; r++) {
+    const m = rollBase() + ROLL_ROWS - 1 - r;
+    gctx.fillStyle = isBlack(m) ? '#0c1015' : '#11161d';
+    gctx.fillRect(kw, r * rh, Math.max(gw, w), rh);   // 铺满视口：曲子短时右边别留黑
+    if (!isBlack(m) && m % 12 === 0) {             // 每个八度的 C 一行提示
+      gctx.fillStyle = 'rgba(95,211,192,.055)'; gctx.fillRect(kw, r * rh, gw, rh);
+    }
+  }
+  // 拍线
+  gctx.strokeStyle = '#1c242e'; gctx.lineWidth = 1;
+  for (let i = 0; i <= total; i++) {
+    const x = kw + i * cw;
+    if (i % 4 === 0) { gctx.strokeStyle = i % 16 === 0 ? '#2c3946' : '#212b35'; }
+    else { gctx.strokeStyle = '#171d24'; }
+    gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, h); gctx.stroke();
+  }
+  // （左侧琴键放到 restore 之后画 —— 它要粘住不跟着滚）
+  // 音符
+  for (const nt of tr.notes) {
+    const r = ROLL_ROWS - 1 - (nt.m - rollBase());
+    if (r < 0 || r >= ROLL_ROWS) continue;
+    const x = kw + nt.s * cw, y = r * rh, ww = Math.max(3, nt.l * cw - 1);
+    const g = gctx.createLinearGradient(0, y, 0, y + rh);
+    g.addColorStop(0, 'rgba(95,211,192,.95)');
+    g.addColorStop(1, 'rgba(95,211,192,.55)');
+    gctx.fillStyle = g;
+    gctx.beginPath(); gctx.roundRect(x + .5, y + 1.5, ww, Math.max(3, rh - 3), 2.5); gctx.fill();
+    gctx.fillStyle = 'rgba(6,35,31,.85)';
+    gctx.fillRect(x + ww - 2, y + 2, 2, Math.max(2, rh - 4));     // 右边缘 = 拖长度
+  }
+  // 播放头
+  if (playing) {
+    const spb = 60 / P.bpm / 4;
+    const s0 = stepIdx - Math.round((nextT - ac.currentTime) / spb);
+    const x = kw + (s0 % total) * cw;
+    gctx.strokeStyle = 'rgba(232,176,106,.9)'; gctx.lineWidth = 2;
+    gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, h); gctx.stroke();
+    follow('rollWrap', roll, x);
+  }
+  gctx.restore();
+  // 左侧琴键**粘住** —— 滚走了就没有音高参照了
+  gctx.fillStyle = '#0a0d11'; gctx.fillRect(0, 0, kw, h);
+  for (let r = 0; r < ROLL_ROWS; r++) {
+    const m = rollBase() + ROLL_ROWS - 1 - r, y = r * rh;
+    gctx.fillStyle = isBlack(m) ? '#151b23' : '#1e2732';
+    gctx.fillRect(0, y + .5, kw - 3, rh - 1);
+    if (m % 12 === 0) {
+      gctx.fillStyle = '#7d8b9b'; gctx.font = '9px ui-monospace,monospace';
+      gctx.fillText(KEYS[m % 12] + (Math.floor(m / 12) - 1), 4, y + rh * .7);
+    }
+  }
+  /* 视野外还有音符就提示一句 —— 不然"视野不跳"就变成了"音符看不见"，一样是丢 */
+  if (tr.notes.length) {
+    const base = rollBase(), top = base + ROLL_ROWS - 1;
+    let below = 0, above = 0;
+    for (const n of tr.notes) { if (n.m < base) below++; else if (n.m > top) above++; }
+    gctx.font = '10px system-ui,sans-serif';
+    if (below) {
+      gctx.fillStyle = 'rgba(232,176,106,.9)';
+      gctx.fillText('↓ 下面还有 ' + below + ' 个音（滚轮往下翻）', kw + 8, h - 6);
+    }
+    if (above) {
+      gctx.fillStyle = 'rgba(232,176,106,.9)';
+      gctx.fillText('↑ 上面还有 ' + above + ' 个音（滚轮往上翻）', kw + 8, 12);
+    }
+  }
+}
+
+function drawGrid() {
+  const total = stepsTotal(), NT = P.tracks.length, ROWH = 46;
+  fitW(grid, 92, total);
+  drawRuler($('gridRuler'), 92, total);
+  if (grid.height !== NT * ROWH) grid.height = NT * ROWH;   // 轨多了，画布跟着变高
+  const w = grid.width, h = grid.height, kw = 92, cw = ZOOM, gw = total * ZOOM;
+  const gx = scrollXOf($('gridWrap'));
+  sx.clearRect(0, 0, w, h);
+  const rh = h / NT;
+  sx.save(); sx.translate(-gx, 0);
+  for (let i = 0; i < NT; i++) {
+    const y = i * rh, sel = i === P.sel;
+    sx.fillStyle = sel ? '#161e26' : (i % 2 ? '#0e1318' : '#0b0f14');
+    sx.fillRect(0, y, Math.max(kw + gw, w), rh);      // 铺满视口：曲子短时右边别留黑
+    for (let s = 0; s < total; s++) {
+      const x = kw + s * cw;
+      if (s % 4 === 0) { sx.fillStyle = '#1b2430'; sx.fillRect(x, y + 2, 1, rh - 4); }
+      const hit = P.tracks[i].notes.filter(n => n.s === s);
+      if (hit.length) {
+        sx.fillStyle = sel ? '#5fd3c0' : '#3f9c8d';
+        sx.beginPath(); sx.roundRect(x + (cw - Math.max(3, Math.min(cw - 3, rh * .72))) / 2, y + rh * .28, Math.max(3, Math.min(cw - 3, rh * .72)), rh * .44, 2); sx.fill();
+      }
+      if (flashCell && flashCell.i === i && flashCell.s === s && performance.now() - flashCell.t < 130) {
+        sx.fillStyle = '#e8b06a';
+        sx.beginPath(); sx.roundRect(x + (cw - Math.max(3, Math.min(cw - 3, rh * .72))) / 2, y + rh * .2, Math.max(3, Math.min(cw - 3, rh * .72)), rh * .6, 2); sx.fill();
+      }
+    }
+  }
+  sx.strokeStyle = '#0a0d11'; sx.lineWidth = 1;
+  for (let s = 0; s <= total; s++) if (s % 16 === 0) {
+    const x = kw + s * cw; sx.beginPath(); sx.moveTo(x, 0); sx.lineTo(x, h); sx.stroke();
+  }
+  if (playing) {
+    const spb = 60 / P.bpm / 4, total2 = stepsTotal();
+    const s0 = stepIdx - Math.round((nextT - ac.currentTime) / spb);
+    const x = kw + (((s0 % total2) + total2) % total2) * cw;
+    sx.strokeStyle = 'rgba(232,176,106,.9)'; sx.lineWidth = 2;
+    sx.beginPath(); sx.moveTo(x, 0); sx.lineTo(x, h); sx.stroke();
+    follow('gridWrap', grid, x);
+  }
+  sx.restore();
+  // 左侧轨名**粘住** —— 滚走了就不知道哪条是哪条
+  for (let i = 0; i < NT; i++) {
+    const y = i * rh, sel = i === P.sel;
+    sx.fillStyle = sel ? '#161e26' : (i % 2 ? '#0e1318' : '#0b0f14');
+    sx.fillRect(0, y, kw, rh);
+    sx.fillStyle = sel ? '#5fd3c0' : '#7d8b9b';
+    sx.font = (sel ? 'bold ' : '') + '12px "PingFang SC",system-ui';
+    sx.fillText(P.tracks[i].name, 10, y + rh * .62);
+    if (P.tracks[i].mute) { sx.fillStyle = '#e8695f'; sx.fillText('静', 72, y + rh * .62); }
+  }
+}
+function drawAll() { drawRoll(); drawGrid(); }
+
+/* ── 鼠标：卷帘 ──────────────────────────────────────────────────────────── */
+/* 视口渲染：画布只有屏幕那么大，所以要**加上横向滚动量**才是歌里的坐标 */
+function cpos(cv, e) {
+  const r = cv.getBoundingClientRect();
+  const wrap = cv.closest('.scroller');
+  const sx0 = wrap ? wrap.scrollLeft : 0;
+  return {
+    x: (e.clientX - r.left) * (cv.width / r.width) + sx0,
+    y: (e.clientY - r.top) * (cv.height / r.height),
+  };
+}
+/* 滚动 = 换一块画（视口渲染的核心）。rAF 节流，别每个 scroll 事件都重画。 */
+let scrollTick = false;
+for (const id of ['rollWrap', 'gridWrap']) {
+  const w = $(id);
+  if (!w) continue;
+  w.addEventListener('scroll', () => {
+    if (scrollTick) return;
+    scrollTick = true;
+    requestAnimationFrame(() => { scrollTick = false; drawAll(); });
+  }, { passive: true });
+}
+let drag = null;
+roll.addEventListener('pointerdown', e => {
+  roll.setPointerCapture(e.pointerId);
+  const { x, y } = cpos(roll, e);
+  const kw = 46, total = stepsTotal(), cw = ZOOM, rh = roll.height / ROLL_ROWS;
+  if (x < kw) return;
+  const s = Math.floor((x - kw) / cw);
+  const m = rollBase() + ROLL_ROWS - 1 - Math.floor(y / rh);
+  const tr = P.tracks[P.sel];
+  snap();                                   // 撤销点：这一下会改动内容（加/移/改长音符）
+  const hit = tr.notes.find(n => n.s === s && n.m === m);
+  if (hit) {
+    const xEnd = kw + (hit.s + hit.l) * cw;
+    /* 右边缘的抓取区原来写死 7px —— 格子只有 9px 时整块音符都落在抓取区里，
+       一碰就变成"改长度"，永远移不动。改成按格宽算，**并且只有够宽的音符才给抓取区**。
+       短音符想改长度：用顶栏那个「音符」下拉。 */
+    const edge = Math.max(4, Math.min(12, cw * 0.4));
+    if (x > xEnd - edge && hit.l * cw >= edge * 2.5) { drag = { mode: 'len', n: hit }; }
+    else { drag = { mode: 'move', n: hit, ds: s - hit.s, dm: m - hit.m }; }
+  } else {
+    const nm = snapM(m);
+    const nt = { s, m: nm, l: Math.max(1, Math.min(total - s, NEW_LEN)), v: .9 };
+    tr.notes.push(nt); tr.lastM = nm;
+    drag = { mode: 'len', n: nt }; refresh(); return;
+  }
+  refresh();
+});
+roll.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const { x, y } = cpos(roll, e);
+  const kw = 46, total = stepsTotal(), cw = ZOOM, rh = roll.height / ROLL_ROWS;
+  const tr = P.tracks[P.sel], n = drag.n;
+  if (drag.mode === 'len') n.l = Math.max(1, Math.min(total - n.s, Math.round((x - kw) / cw) - n.s));
+  else {
+    const s = Math.max(0, Math.min(total - 1, Math.floor((x - kw) / cw) - drag.ds));
+    const m = rollBase() + ROLL_ROWS - 1 - Math.floor(y / rh) - drag.dm;
+    n.s = s; n.m = snapM(m);
+  }
+  drawAll();
+});
+addEventListener('pointerup', () => { if (drag) { drag = null; refresh(); } });
+/* 滚轮在卷帘上 = 上下翻音高（不是滚页面）。这解决了"视野不跳就看不见别的音"：
+   视野自己不动，但你想看就能翻过去。 */
+roll.addEventListener('wheel', e => {
+  e.preventDefault();
+  const step = e.deltaY > 0 ? -2 : 2;     // 往下滚 = 看更低的音
+  scrollPitch(step);
+}, { passive: false });
+roll.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const { x, y } = cpos(roll, e);
+  const kw = 46, total = stepsTotal(), cw = ZOOM, rh = roll.height / ROLL_ROWS;
+  const s = Math.floor((x - kw) / cw), m = rollBase() + ROLL_ROWS - 1 - Math.floor(y / rh);
+  const tr = P.tracks[P.sel], i = tr.notes.findIndex(n => n.s === s && n.m === m);
+  if (i >= 0) { tr.notes.splice(i, 1); refresh(); }
+});
+function snapM(m) {
+  if (P.scale === 'chroma') return m;
+  const root = KEYROOT[P.key], set = SCALES[P.scale];
+  const rel = ((m - root) % 12 + 12) % 12;
+  let best = rel, d = 9;
+  for (const s of set) { const dd = Math.min(Math.abs(s - rel), 12 - Math.abs(s - rel)); if (dd < d) { d = dd; best = s; } }
+  let out = m + (best - rel - (best - rel > 6 ? 12 : best - rel < -6 ? -12 : 0));
+  return out;
+}
+
+/* ── 鼠标：步进网格（点/拖 加删音符） ─────────────────────────────────────── */
+let painting = false, paintMode = true;
+grid.addEventListener('pointerdown', e => {
+  grid.setPointerCapture(e.pointerId);
+  const { x, y } = cpos(grid, e);
+  const kw = 92, total = stepsTotal(), cw = ZOOM, rh = grid.height / P.tracks.length;
+  if (x < kw) { P.sel = Math.max(0, Math.min(P.tracks.length - 1, Math.floor(y / rh))); buildTracks(); refresh(); return; }
+  const s = Math.floor((x - kw) / cw), i = Math.floor(y / rh);
+  if (i < 0 || i >= P.tracks.length) return;
+  P.sel = i;
+  const tr = P.tracks[i], hit = tr.notes.find(n => n.s === s);
+  paintMode = !hit;
+  painting = true;
+  if (hit) tr.notes.splice(tr.notes.indexOf(hit), 1);
+  else tr.notes.push({ s, m: snapM(tr.lastM || 60), l: 1, v: .9 });
+  buildTracks(); refresh();
+});
+grid.addEventListener('pointermove', e => {
+  if (!painting) return;
+  const { x, y } = cpos(grid, e);
+  const kw = 92, total = stepsTotal(), cw = ZOOM, rh = grid.height / P.tracks.length;
+  if (x < kw) return;
+  const s = Math.floor((x - kw) / cw), i = Math.floor(y / rh);
+  if (i < 0 || i >= P.tracks.length) return;
+  const tr = P.tracks[i];
+  const hit = tr.notes.find(n => n.s === s);
+  if (paintMode && !hit) tr.notes.push({ s, m: snapM(tr.lastM || 60), l: 1, v: .9 });
+  if (!paintMode && hit) tr.notes.splice(tr.notes.indexOf(hit), 1);
+  drawAll();
+});
+addEventListener('pointerup', () => { if (painting) { painting = false; refresh(); } });
+
+/* ── 轨道面板 ────────────────────────────────────────────────────────────── */
+function buildTracks() {
+  const box = $('tracks'); box.innerHTML = '';
+  P.tracks.forEach((tr, i) => {
+    const d = document.createElement('div');
+    d.className = 'tr' + (i === P.sel ? ' sel' : '');
+    d.innerHTML =
+      '<div class="r1"><span class="dot" style="background:' + (['#e8695f','#e8b06a','#8fb85c','#5fd3c0','#5c9de8','#a98fe8','#e88fc0','#7d8b9b'][i % 8]) + '"></span>' +
+      '<span class="nm">' + tr.name + '</span>' +
+      '<button class="mini m' + (tr.mute ? ' on r' : '') + '">静</button>' +
+      '<button class="mini s' + (tr.solo ? ' on' : '') + '">独</button>' +
+      '<button class="mini del" title="删掉这条轨">×</button></div>' +
+      '<div class="r2"><span>音色</span><select class="ps"></select></div>' +
+      '<div class="r2"><span>音量</span><input type="range" class="vv" min="0" max="1" step="0.01" value="' + tr.vol + '"></div>' +
+      '<div class="r2"><span>声像</span><input type="range" class="pp" min="-1" max="1" step="0.05" value="' + tr.pan + '"></div>' +
+      '<div class="r2"><span>延迟</span><input type="range" class="ss" min="0" max="1" step="0.01" value="' + tr.send + '"></div>';
+    const sel = d.querySelector('.ps');
+    for (const k in PRESETS) {
+      if (ALIASES.has(k) && tr.preset !== k) continue;   // 别名不进列表（除非当前轨正用着它，那得显示出来）
+      const o = document.createElement('option'); o.textContent = k; sel.appendChild(o);
+    }
+    for (const k of SAMPLES.keys()) { const o = document.createElement('option'); o.textContent = SP + k; sel.appendChild(o); }   // 录到的/拖进来的素材在这里
+    sel.value = tr.preset;
+    sel.onchange = () => { tr.preset = sel.value; };
+    d.querySelector('.nm').onclick = () => { P.sel = i; buildTracks(); refresh(); };
+    d.querySelector('.m').onclick = ev => { tr.mute = !tr.mute; ev.target.classList.toggle('on', tr.mute); ev.target.classList.toggle('r', tr.mute); };
+    d.querySelector('.s').onclick = ev => { tr.solo = !tr.solo; ev.target.classList.toggle('on', tr.solo); };
+    d.querySelector('.del').onclick = () => {
+      if (P.tracks.length <= 1) { $('stat').textContent = '至少得留一条轨。'; return; }
+      /* 确认框有点丑，但"删了没有撤销"这件事只能用这个保命 —— 这个按钮就挨着「静」「独」。 */
+      if (!confirm('删掉「' + tr.name + '」这条轨？（它上面的 ' + tr.notes.length + ' 个音符也一起没了 —— 按 Ctrl+Z 可以撤回来）')) return;
+      snap();                                   // 撤销点：删轨是破坏性操作，必须先拍
+      P.tracks.splice(i, 1);
+      if (P.sel >= P.tracks.length) P.sel = P.tracks.length - 1;
+      buildTracks(); refresh();
+      $('stat').textContent = '删了一条，现在 ' + P.tracks.length + ' 条轨。';
+    };
+    d.querySelector('.vv').oninput = ev => { tr.vol = +ev.target.value; };
+    d.querySelector('.pp').oninput = ev => { tr.pan = +ev.target.value; };
+    d.querySelector('.ss').oninput = ev => { tr.send = +ev.target.value; };
+    box.appendChild(d);
+  });
+  $('rollTitle').textContent = '钢琴卷帘 —— 正在编：' + P.tracks[P.sel].name + '（' + P.tracks[P.sel].preset + '）';
+}
+/* ── 顶栏 ────────────────────────────────────────────────────────────────── */
+for (const k of KEYS) { const o = document.createElement('option'); o.textContent = k; $('key').appendChild(o); }
+$('key').value = 'A';
+$('key').onchange = () => { P.key = $('key').value; refresh(); };
+$('scale').onchange = () => { P.scale = $('scale').value; refresh(); };
+/* **时长 → 小节数**（一小节 = 4 拍）。这样"最高 10 分钟"跟 BPM 无关：
+   10 分钟 @ 88 BPM = 220 小节，@ 180 BPM = 450 小节 —— 由秒数换算，不由我们拍脑袋定上限。 */
+const secPerBar = () => 60 / P.bpm * 4;
+const barsFromMins = (m) => Math.max(1, Math.round(m * 60 / secPerBar()));
+function showLen() {
+  const sec = P.bars * secPerBar();
+  $('lenTxt').textContent = P.bars + ' 小节 ≈ ' + (sec >= 60 ? (sec / 60).toFixed(2) + ' 分钟' : sec.toFixed(1) + ' 秒');
+}
+$('mins').onchange = () => { P.bars = barsFromMins(+$('mins').value); buildTracks(); refresh(); showLen(); };
+/* 新音符的默认长度（十六分音符为单位）。以前写死 1，想写长音只能拖右边缘 ——
+   而抓取区只有 7px，格子本身才 9px，几乎一碰就是"改长度"。 */
+/* ── 从「新标签打开」进来时，给一条回 DSH 的路 ──────────────────────────────
+   它是独立标签，不是 iframe —— 浏览器自带的"返回"不一定回到 DSH（可能是 about:blank）。
+   所以自己给一个：先聚焦 opener，再关自己；关不掉（被浏览器策略挡）就退化成后退。 */
+if (new URLSearchParams(location.search).get('from') === 'tab') {
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:sticky;top:0;z-index:99;display:flex;align-items:center;gap:10px'
+    + ';padding:6px 12px;margin:-20px -20px 8px;background:#131a22;border-bottom:1px solid #24303c'
+    + ';font-size:12px;color:#8fa2b5';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = '← 回到 DSH';
+  b.style.cssText = 'all:unset;cursor:pointer;color:#e8b06a;font:inherit;padding:3px 10px'
+    + ';border:1px solid #3a4a5c;border-radius:6px';
+  b.onclick = () => {
+    try { if (window.opener && !window.opener.closed) window.opener.focus(); } catch (e) { /* 忽略 */ }
+    try { window.close(); } catch (e) { /* 忽略 */ }
+    setTimeout(() => { try { history.back(); } catch (e) { /* 忽略 */ } }, 60);
+  };
+  bar.appendChild(b);
+  const tip = document.createElement('span');
+  tip.textContent = '这一页是独立标签，关掉它就回到 DSH 的设置页';
+  bar.appendChild(tip);
+  document.body.prepend(bar);
+}
+
+let NEW_LEN = 2;
+$('nlen').onchange = () => { NEW_LEN = +$('nlen').value; };
+/* 缩放：改的是每格宽度，refresh() 时 fitW 会按新宽度重算画布 */
+$('zoom').onchange = () => { ZOOM = +$('zoom').value; refresh(); };
+
+/* ── 撤销 ─────────────────────────────────────────────────────────────────
+   用**整份快照**，不用"逐操作反向记录" —— 反向记录得处理"这条轨被删了但音符还被拖过"
+   这类交叉情况，几十行也覆盖不全。快照的代价是内存（一份 JSON 几十 KB），所以只留 40 步。
+   在**会改变内容的动作开始前**拍一张，撤销就是弹回上一张。 */
+const UNDO = [], REDO = [];
+function snap() {
+  try {
+    UNDO.push(JSON.stringify(P));
+    if (UNDO.length > 40) UNDO.shift();
+    REDO.length = 0;
+    $('undo').disabled = false;
+  } catch (e) { /* 拍不下就算了 —— 别因为撤销功能把编辑卡住 */ }
+}
+function applySnap(s) {
+  const o = JSON.parse(s);
+  P.bars = o.bars; P.bpm = o.bpm; P.key = o.key; P.scale = o.scale;
+  P.tracks = o.tracks;
+  P.sel = Math.max(0, Math.min(o.sel || 0, P.tracks.length - 1));
+  /* ⚠️ 必须把**控件和侧栏**也一起还原 —— 只调 refresh() 的话画布会回去，
+     但右边的轨道卡还是旧的（实测撤掉一条轨，卡片还挂在那儿）。 */
+  try {
+    $('bpm').value = P.bpm; $('bpmv').textContent = P.bpm;
+    $('key').value = P.key; $('scale').value = P.scale;
+    showLen();
+  } catch (e) { /* 控件还没建好就算了 */ }
+  buildTracks();
+  refresh();
+}
+function undo() {
+  if (!UNDO.length) return;
+  try { REDO.push(JSON.stringify(P)); } catch (e) { /* 忽略 */ }
+  try { applySnap(UNDO.pop()); } catch (e) { /* 快照坏了就当没撤 */ }
+  $('undo').disabled = !UNDO.length;
+}
+function redo() {
+  if (!REDO.length) return;
+  try { UNDO.push(JSON.stringify(P)); } catch (e) { /* 忽略 */ }
+  try { applySnap(REDO.pop()); } catch (e) { /* 忽略 */ }
+  $('undo').disabled = !UNDO.length;
+}
+$('undo').onclick = undo;
+/* 全屏：设置面板里的 iframe 只有四五百像素高，写曲子确实挤 —— 一键铺满整个窗口（Esc 退出）。
+   ⚠️ 宿主那边的 iframe 必须带 allow="fullscreen"，否则这里会直接被拒。 */
+$('fs').onclick = () => {
+  try {
+    if (document.fullscreenElement) { document.exitFullscreen(); return }
+    const p = document.documentElement.requestFullscreen()
+    if (p && p.catch) p.catch((e) => { $('stat').textContent = '全屏被拒：' + e.message })
+  } catch (e) { $('stat').textContent = '全屏不支持：' + e.message }
+};
+document.addEventListener('fullscreenchange', () => {
+  const b = $('fs');
+  if (b) b.textContent = document.fullscreenElement ? '⤡ 退出全屏' : '⛶ 全屏';
+  refresh();      // 视口变了，卷帘行高要按新的 innerHeight 重算
+});
+document.addEventListener('keydown', (e) => {
+  const k = (e.key || '').toLowerCase();
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+});
+$('bpm').oninput = () => { P.bpm = +$('bpm').value; $('bpmv').textContent = P.bpm; showLen(); };
+$('play').onclick = () => { if (playing) { stopAll(); $('play').classList.remove('on'); $('play').textContent = '▶ 播放'; } else { startPlay(); $('play').classList.add('on'); $('play').textContent = '❚❚ 暂停'; } };
+$('stop').onclick = () => { stopAll(); stepIdx = 0; $('play').classList.remove('on'); $('play').textContent = '▶ 播放'; drawAll(); };
+$('clr').onclick = () => { if (!confirm('清空所有轨道的音符？')) return; snap(); for (const t of P.tracks) t.notes = []; refresh(); };
+$('addTr').onclick = () => {
+  snap();
+  /* ⚠️ 两个问题一起修：
+     ① 原来是 push 到末尾 —— 只能加在下面。现在**插在当前选中轨的上方**。
+     ② 原来加完写 `P.sel = 最后一条`，于是选中轨立刻切成新加的空轨，
+        卷帘显示的是选中轨 → 看着像"好不容易画的音符被清掉了"（其实没删，只是换了显示）。
+        现在**选中轨跟着原来那条走**（它被挤到 at+1），卷帘内容不变。 */
+  /* 加在列表末尾，**不动当前选中轨**。原来会把选中轨换成新加的空轨，
+     于是卷帘立刻切成空轨，看着像"好不容易画的音符被清掉了"（其实没删）。 */
+  P.tracks.push(newTrack('轨' + (P.tracks.length + 1), '钢琴', .75));
+  buildTracks(); refresh();
+  $('stat').textContent = '加了一条，现在 ' + P.tracks.length + ' 条轨（选中还是「' + P.tracks[P.sel].name + '」）。';
+};
+
+/* ── 导出 WAV：同一个调度函数丢进 OfflineAudioContext，再手写 WAV 头 ────── */
+function wavBlob(buf) {
+  const ch = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate;
+  const bytes = 44 + len * ch * 2;
+  const ab = new ArrayBuffer(bytes), v = new DataView(ab);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, bytes - 8, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, ch, true); v.setUint32(24, sr, true);
+  v.setUint32(28, sr * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, len * ch * 2, true);
+  const chans = []; for (let c = 0; c < ch; c++) chans.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < len; i++) for (let c = 0; c < ch; c++) {
+    let s = Math.max(-1, Math.min(1, chans[c][i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+  }
+  return new Blob([ab], { type: 'audio/wav' });
+}
+/* 拼接式的 WAV：**不给整首分配一个 ArrayBuffer** —— 一段一个 Blob，最后让 Blob 自己拼。
+   这样内存峰值只有一段那么大（10 分钟曲子：一次性要 101 MB，分段只要 5 MB）。 */
+function wavBlobChunks(chunks, sr) {
+  const ch = chunks[0].buf.numberOfChannels;
+  let frames = 0;
+  for (const c of chunks) frames += c.buf.length - c.skip;
+  const head = new ArrayBuffer(44), v = new DataView(head);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + frames * ch * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, ch, true); v.setUint32(24, sr, true);
+  v.setUint32(28, sr * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, frames * ch * 2, true);
+  const parts = [head];
+  for (const c of chunks) {
+    const n = c.buf.length - c.skip;
+    const ab = new ArrayBuffer(n * ch * 2), dv = new DataView(ab);
+    const chans = []; for (let k = 0; k < ch; k++) chans.push(c.buf.getChannelData(k));
+    let o = 0;
+    for (let i = 0; i < n; i++) for (let k = 0; k < ch; k++) {
+      let s = chans[k][c.skip + i];
+      s = s > 1 ? 1 : (s < -1 ? -1 : s);
+      dv.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+    }
+    parts.push(ab);
+  }
+  return new Blob(parts, { type: 'audio/wav' });
+}
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('exp').onclick = async () => {
+  ensureAudio();                                   // 先把活 context 备好（不然从 IndexedDB 恢复的采样还没料）
+  const btn = $('exp'); btn.textContent = '渲染中…'; btn.disabled = true;
+  try {
+    const SR = 44100, spb = 60 / P.bpm / 4, dur = stepsTotal() * spb + 2.4;
+    /* **分段渲染** —— 两个原因，都是量出来的：
+       ① 内存：10 分钟一次性渲染要 306 MB（能扛，但没必要）
+       ② **渲染时间**（更要紧）：一个 OfflineAudioContext 里塞 1608 个音符 ≈ 上万个节点时，
+          整段渲染**比音频本身还慢** —— 实测 288 秒的曲子渲染超过 134 秒还没完。
+          我先前量的"47.5 倍实时"是**不代表性的样本**（4 小节音符 + 56 秒静音），不能外推。
+       段边界往前多渲 PRE 秒再丢掉 —— 跨段的长音才不会在段头被重新"起音"。 */
+    const SEG = 24, PRE = 3.4;
+    const chunks = [];
+    let pk = 0, clip = 0;
+    for (let t = 0; t < dur; t += SEG) {
+      const from = Math.max(0, t - PRE);
+      const len = Math.min(SEG + PRE, dur - from);
+      const oac = new OfflineAudioContext(2, Math.ceil(SR * len), SR);
+      const on = makeNoise(oac);
+      const om = oac.createGain(); om.gain.value = MASTER;
+      const lim = oac.createDynamicsCompressor();
+      lim.threshold.value = LIM_T; lim.ratio.value = LIM_R;
+      om.connect(lim);
+      addSoftClip(oac, lim).connect(oac.destination);
+      const ob = oac.createGain(); ob.connect(om);
+      const d = oac.createDelay(1); d.delayTime.value = .30;
+      const fb = oac.createGain(); fb.gain.value = .30;
+      const wet = oac.createGain(); wet.gain.value = .5;
+      ob.connect(d); d.connect(fb); fb.connect(d); d.connect(wet); wet.connect(om);
+      P.reps = 1;
+      schedule(oac, ob, on, -from + 0.02, P.tracks, len);   // 只建这一段窗口内的节点
+      btn.textContent = '渲染 ' + Math.round(100 * t / dur) + '%';
+      const buf = await oac.startRendering();
+      const skip = Math.round((t - from) * SR);
+      for (let c = 0; c < buf.numberOfChannels; c++) {
+        const dd = buf.getChannelData(c);
+        for (let i = skip; i < dd.length; i++) { const a = Math.abs(dd[i]); if (a > pk) pk = a; if (a >= .999) clip++; }
+      }
+      chunks.push({ buf, skip });
+    }
+    /* **导出后自报峰值** —— 削波是那种"听得出、看不出"的毛病，所以别等人拿工具去量，让工具自己说。
+       （DynamicsCompressorNode 不是 limiter：3ms 的 attack 会让瞬态从它前面穿过去 —— 这件事得自己盯着。）*/
+    let pk2 = pk, clip2 = clip;   // 峰值/削波已经在分段循环里数过了
+    download(wavBlobChunks(chunks, SR), '音乐台-' + Date.now() + '.wav');
+    $('stat').textContent = '已导出 ' + dur.toFixed(1) + ' 秒 · 峰值 ' + pk2.toFixed(3)
+      + '（' + (20 * Math.log10(pk2 || 0.001)).toFixed(1) + ' dBFS）'
+      + (clip2 ? ' ⚠️ 有 ' + clip2 + ' 个样本贴顶，要削波了 —— 把某条轨的音量调低点' : ' ✅ 有余量')
+      + ' · ' + (chunks.reduce((a, c) => a + (c.buf.length - c.skip), 0) * 2 * 2 / 1048576).toFixed(1) + ' MB';
+  } catch (e) { $('stat').textContent = '导出失败：' + e.message; }
+  btn.textContent = '导出 WAV'; btn.disabled = false;
+};
+
+/* ── 导出 MIDI：**把草稿交给 FL / LMMS 继续做** ──────────────────────────────
+   手写标准 MIDI 文件（格式 0），一个库都不用。
+   这就是"流水线"那一步：在音乐台快速写 idea → 导出 .mid → 丢进 FL 接着编。
+   ⚠️ 两个必须处理的细节：
+   ① **打击轨要导到第 10 通道**（索引 9）并且映射成 GM 鼓音号 —— 不然导出去是一串有音高的怪音符；
+   ② **采样轨导不进去**（MIDI 里没有音频），跳过并**在状态栏说明**，别悄悄丢。 */
+const GM_DRUM = { '底鼓':36, '打':36, '军鼓':38, '踩镲':42, '金属':42, '嗵鼓':45, '木鱼':76 };
+function vlq(n) {                                    // MIDI 的可变长整数（每个字节 7 位，最高位表示"还有"）
+  const b = [n & 0x7f]; n >>= 7;
+  while (n > 0) { b.unshift((n & 0x7f) | 0x80); n >>= 7; }
+  return b;
+}
+function buildMIDI() {
+  const TPQ = 480, STEP = TPQ / 4;                   // 四分音符 480 tick → 十六分 = 120
+  const ev = [];
+  const us = Math.round(60000000 / P.bpm);
+  ev.push({ t: 0, d: [0xFF, 0x51, 0x03, (us >> 16) & 255, (us >> 8) & 255, us & 255] });  // 速度
+  const nm = 'YinYueTai';                            // 名字用 ASCII：中文在 SMF 里各家解释不一，何必冒险
+  ev.push({ t: 0, d: [0xFF, 0x03, nm.length, ...[...nm].map(c => c.charCodeAt(0))] });    // 轨名
+  const skipped = [];
+  P.tracks.forEach((tr, i) => {
+    if (String(tr.preset).startsWith(SP)) { skipped.push(tr.name); return; }   // 采样轨：MIDI 装不下音频
+    const drum = GM_DRUM[tr.preset];
+    const ch = drum ? 9 : (i < 9 ? i : i + 1);       // 通道 10（索引 9）留给鼓，其余往后排
+    for (const nt of tr.notes) {
+      const m = drum ? drum : nt.m;
+      const v = Math.max(1, Math.min(127, Math.round((nt.v == null ? .8 : nt.v) * (tr.vol == null ? .8 : tr.vol) * 127)));
+      ev.push({ t: nt.s * STEP, d: [0x90 | ch, m, v], on: 1 });
+      ev.push({ t: (nt.s + nt.l) * STEP, d: [0x80 | ch, m, 64] });
+    }
+  });
+  ev.sort((a, b) => a.t - b.t || ((a.d[0] & 0xF0) - (b.d[0] & 0xF0)));   // 同一刻：**先关后开**（不然同音重复会被切掉）
+  const trk = []; let last = 0;
+  for (const e of ev) {
+    trk.push(...vlq(e.t - last));
+    trk.push(...e.d);
+    last = e.t;
+  }
+  trk.push(0, 0xFF, 0x2F, 0x00);                     // End of Track
+  const MThd = [0x4D, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, (TPQ >> 8) & 255, TPQ & 255];
+  const L = trk.length;
+  const MTrk = [0x4D, 0x54, 0x72, 0x6B, (L >> 24) & 255, (L >> 16) & 255, (L >> 8) & 255, L & 255];
+  return { bytes: new Uint8Array([...MThd, ...MTrk, ...trk]), skipped,
+           notes: ev.filter(e => e.on).length, trackBytes: L, events: ev.length };
+}
+$('mid').onclick = () => {
+  const r = buildMIDI();
+  download(new Blob([r.bytes], { type: 'audio/midi' }), '音乐台-' + Date.now() + '.mid');
+  $('stat').textContent = 'MIDI 导出好了：' + r.notes + ' 个音符 / ' + r.events + ' 个事件 / '
+    + (r.bytes.length / 1024).toFixed(1) + ' KB'
+    + (r.skipped.length ? '（采样轨没导 —— MIDI 里没有音频：' + r.skipped.join('、') + '）' : '');
+};
+
+/* ── 导出采样包：**自己写一个 ZIP**（store 模式，不压缩）──────────────────────
+   为什么不用库：store 模式的 zip 只有三个结构（本地文件头 / 数据 / 中央目录+EOCD），
+   加一张 CRC32 表一共几十行 —— 比引一个库小，而且不依赖网络。
+   ⚠️ **文件名必须等于采样的名字**（`录音1.wav`）：因为 addSample 是拿文件名当名字的，
+   这样在另一台机器上把 wav 拖回来，名字自动对上，工程里那句「用采样:录音1」就又活了。 */
+const CRC_T = (() => { const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
+  return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipFiles(files) {                       // files: [{name, data:Uint8Array}]
+  const enc = new TextEncoder(), parts = [], cd = []; let off = 0;
+  for (const f of files) {
+    const nm = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+    const lh = new Uint8Array(30 + nm.length), v = new DataView(lh.buffer);
+    v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0, true);
+    v.setUint16(8, 0, true);  v.setUint16(10, 0, true); v.setUint16(12, 0, true);
+    v.setUint32(14, crc, true); v.setUint32(18, n, true); v.setUint32(22, n, true);
+    v.setUint16(26, nm.length, true); v.setUint16(28, 0, true);
+    lh.set(nm, 30);
+    parts.push(lh, f.data); cd.push({ nm, crc, n, off });
+    off += lh.length + n;
+  }
+  const cdStart = off, cdEnt = [];
+  for (const c of cd) {
+    const h = new Uint8Array(46 + c.nm.length), v = new DataView(h.buffer);
+    v.setUint32(0, 0x02014b50, true); v.setUint16(4, 20, true); v.setUint16(6, 20, true);
+    v.setUint16(8, 0, true); v.setUint16(10, 0, true); v.setUint16(12, 0, true); v.setUint16(14, 0, true);
+    v.setUint32(16, c.crc, true); v.setUint32(20, c.n, true); v.setUint32(24, c.n, true);
+    v.setUint16(28, c.nm.length, true); v.setUint16(30, 0, true); v.setUint16(32, 0, true);
+    v.setUint16(34, 0, true); v.setUint16(36, 0, true); v.setUint32(38, 0, true);
+    v.setUint32(42, c.off, true);
+    h.set(c.nm, 46);
+    cdEnt.push(h); off += h.length;                  // ⚠️ 绝不能 push 回 cd —— 那是在遍历中改可迭代对象，
+  }                                                  //    for...of 会把新元素也取出来（我第一版就这么崩的）
+  const cdSize = off - cdStart;
+  const eocd = new Uint8Array(22), v2 = new DataView(eocd.buffer);
+  v2.setUint32(0, 0x06054b50, true);
+  v2.setUint16(8, cd.length, true); v2.setUint16(10, cd.length, true);
+  v2.setUint32(12, cdSize, true); v2.setUint32(16, cdStart, true);
+  return new Blob([...parts, ...cdEnt, eocd], { type: 'application/zip' });
+}
+$('pack').onclick = async () => {
+  const names = [...SAMPLES.keys()];
+  if (!names.length) { $('stat').textContent = '还没有采样可导 —— 先录一段，或者拖个 wav 进来。'; return; }
+  ensureAudio();
+  const enc = new TextEncoder(), files = [];
+  for (const n of names) {
+    const s = SAMPLES.get(n);
+    const b = s.buf || bufFromRec(s.rec, ac);
+    if (!b) continue;
+    files.push({ name: n + '.wav', data: new Uint8Array(await wavBlob(b).arrayBuffer()) });
+  }
+  files.push({ name: '工程.json', data: enc.encode(JSON.stringify(P, null, 1)) });
+  files.push({ name: '读我.txt', data: enc.encode(
+    '音乐台 · 采样包\n\n' +
+    '这里面有：\n' +
+    '  · 工程.json      —— 你的音符、乐器、混音设置\n' +
+    '  · *.wav          —— 你录的 / 拖进来的采样\n\n' +
+    '换一台电脑怎么恢复：\n' +
+    '  1. 打开 音乐台.html，点「载入工程」选 工程.json\n' +
+    '  2. 把这个文件夹里的 .wav **逐个拖进页面**（或点「拖入 wav 当采样」）\n' +
+    '  3. 名字会对上（文件名 = 采样名），那条轨的声音就回来了\n\n' +
+    '注意：文件名不要改。工程里记的是名字，改了就对不上了。\n') });
+  const blob = zipFiles(files);
+  download(blob, '音乐台-采样包-' + Date.now() + '.zip');
+  $('stat').textContent = '采样包导好了：' + names.length + ' 段采样 + 工程 + 读我，'
+    + (blob.size / 1048576).toFixed(2) + ' MB。里面有「读我.txt」写着怎么恢复。';
+};
+
+/* ── 工程存/读 ───────────────────────────────────────────────────────────── */
+$('sav').onclick = () => {
+  const b = new Blob([JSON.stringify(P, null, 1)], { type: 'application/json' });
+  download(b, '音乐台工程.json');
+};
+$('lod').onclick = () => $('fjson').click();
+$('fjson').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      P.bpm = d.bpm ?? P.bpm; P.bars = d.bars ?? P.bars;
+      P.key = d.key ?? P.key; P.scale = d.scale ?? P.scale; P.sel = 0;
+      if (d.tracks) P.tracks = d.tracks;
+      $('bpm').value = P.bpm; $('bpmv').textContent = P.bpm;
+      $('key').value = P.key; $('scale').value = P.scale;
+      /* ⚠️ 这里**不能**写 `$('bars').value = ...` —— 那个下拉已经换成「时长」了，
+         引一个不存在的元素会让整个载入流程炸掉（载入工程这条路上会静默失败）。
+         改成只把真实长度显示出来，下拉保持原样（它代表"上次选的时长"）。 */
+      showLen();
+      buildTracks(); refresh();
+    } catch (err) { $('stat').textContent = '读数失败：' + err.message; }
+  };
+  r.readAsText(f);
+};
+/* 拖 wav 进来当采样（运行时载入 —— 所以不占本身体积） */
+$('imp').onclick = () => $('fwav').click();
+$('fwav').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    ensureAudio();
+    const buf = await ac.decodeAudioData(await f.arrayBuffer());
+    const nm = addSample(f.name.replace(/\.[^.]+$/, ''), buf);
+    P.tracks[P.sel].preset = SP + nm;               // 拖进来就能立刻用
+    buildTracks(); drawAll();
+    $('stat').textContent = '「' + f.name + '」（' + buf.duration.toFixed(1) + ' 秒）进来了，变成音色「'
+      + SP + nm + '」并用在「' + P.tracks[P.sel].name + '」轨上。它只在你这个浏览器里，不进文件体积。';
+  } catch (err) { $('stat').textContent = '这个文件解不开：' + err.message; }
+};
+
+/* **录完先标准化**（量峰值 → 拉到目标）—— 内置麦克风录出来常常只有 0.02~0.1 的峰值，
+   当采样用基本听不见。这就是 DAW 里那个 Normalize：不是"美化"，是**可量**的放大。
+   有上限（默认 24 倍）：峰值太小说明基本是底噪，硬拉只会把噪声拉成主角。 */
+function normalizeBuf(buf, target, maxGain) {
+  target = target == null ? 0.7 : target; maxGain = maxGain == null ? 24 : maxGain;
+  let pk = 0;
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > pk) pk = v; }
+  }
+  const g = pk > 1e-6 ? Math.min(maxGain, target / pk) : 1;
+  if (g > 1.05) for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) d[i] *= g;      // AudioBuffer 的 data 可写，就地放大
+  }
+  return { peak: pk, gain: g };
+}
+
+/* ── 麦克风：返送 + 录音 ─────────────────────────────────────────────────────
+   ⚠️ **低延迟的关键不是"浏览器做不到"，是关掉默认开着的那三个实时处理。**
+   回声消除（AEC）把音频塞进分块管线，典型加 50~200ms —— 关掉才走近直通。
+   这套参数不是我编的，是 HIAUDIO 论文里公开的实际配置。
+   ⚠️ WebKit 无视 echoCancellation:false（bug 320452，无条件实例化 VPIO）→ 这条只有 Chromium 走得通。
+   ⚠️ 扬声器 + 麦克风 = 啸叫，物理，改不了 → 必须耳机（FL 录吉他也一样）。 */
+/* **两套参数，用途相反** —— 上一版我用一套打天下，错在把"返送的参数"套到"录音"上：
+   · 返送（边弹边听自己）：要低延迟 → 关 AEC。代价是必须耳机（扬声器必啸叫）。
+   · 录音（弹完再听）：**不在乎延迟** → 开着 AEC，它正好把扬声器漏进麦克风的伴奏压掉。
+     **没耳机的人走这条。**
+   ⚠️ autoGainControl 我原来写 false，理由写的是"要干净" —— **错的**。
+   自动增益就是给"离得远的、内置的、大声不起来的"麦克风用的。关掉它 = 我自己关掉了一只手。
+   （软件放大也能救，但会把底噪一起放大；AGC 是在**采集端**做的，更干净。） */
+const MIC_C = {
+  record: { video: false, audio: { echoCancellation: true, noiseSuppression: true,
+            autoGainControl: true, latency: 0.05, channelCount: 1 } },
+  monitor: { video: false, audio: { echoCancellation: false, noiseSuppression: false,
+             autoGainControl: false, latency: 0, channelCount: 1 } },
+};
+let micStream = null, micSrc = null, monGain = null, mediaRec = null, chunks = [], takes = [];
+
+const latTxt = () => '输出缓冲 ' + (ac.baseLatency * 1000).toFixed(1) + 'ms · 输出延迟 '
+  + (ac.outputLatency ? (ac.outputLatency * 1000).toFixed(1) + 'ms' : '读不到（浏览器没报）');
+
+function closeMic() {                                     // 同步的 —— 所以切模式可以直接接 openMic()
+  try { if (mediaRec && mediaRec.state === 'recording') mediaRec.stop(); } catch (e) { }
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  try { micSrc.disconnect(); monGain.disconnect(); } catch (e) { }
+  micStream = null; monGain = null;
+  $('micOpen').textContent = '打开麦克风';
+  $('mon').disabled = true; $('rec').disabled = true; $('micMode').disabled = true;
+  $('mon').textContent = '返送：关'; $('mon').classList.remove('on');
+  $('micInfo').textContent = '已关闭。';
+}
+async function openMic() {
+  try {
+    ensureAudio(); if (ac.state === 'suspended') await ac.resume();
+    const mode = $('micMode').value;
+    micStream = await navigator.mediaDevices.getUserMedia(MIC_C[mode]);
+    micSrc = ac.createMediaStreamSource(micStream);
+    monGain = ac.createGain(); monGain.gain.value = 0;    // **默认不返送**（不戴耳机会啸叫）
+    micSrc.connect(monGain); monGain.connect(master);
+    const tr = micStream.getAudioTracks()[0];
+    const st = tr.getSettings ? tr.getSettings() : {};
+    /* ⚠️ 这里**不能"反推"**。上一版写的是 `st.echoCancellation !== false ? '已关' : '没关'` ——
+       而设备不报这个 setting 时（undefined !== false 成立）它会显示"已关 ✅"，
+       **是在替浏览器撒谎**。改成先说"我们请求了什么"（这个我确定），
+       设备报了再补一句"设备确认"，没报就直说没报。 */
+    const want = MIC_C[mode].audio.echoCancellation;
+    const got = (st.echoCancellation === undefined)
+      ? '设备没报' : ('设备确认 ' + (st.echoCancellation ? '开' : '关'));
+    $('micInfo').textContent = (tr.label || '麦克风') + ' · ' + ac.sampleRate + 'Hz · ' + latTxt()
+      + ' · 回声消除 请求' + (want ? '开' : '关') + '（' + got + '）'
+      + ' · ' + (mode === 'record' ? '没耳机就留着这个' : '❗不戴耳机必啸叫');
+    $('micOpen').textContent = '关闭麦克风';
+    $('micMode').disabled = false;
+    $('mon').disabled = (mode === 'record');              // 录音模式不给返送：那条路没耳机根本走不通
+    $('rec').disabled = false;
+  } catch (e) {
+    $('micInfo').textContent = '打不开：' + (e.name || '') + ' ' + (e.message || '');
+    $('micTip').innerHTML = '打不开的常见原因：<b>没给权限</b>、<b>没设备</b>，或者'
+      + '<b>页面不是安全上下文</b> —— 麦克风只允许 https 或 <b>localhost</b>，'
+      + '用 file:// 直接打开时浏览器多半直接拒。把文件挂到本地服务器上再试。';
+  }
+}
+$('micOpen').onclick = () => micStream ? closeMic() : openMic();
+$('mon').onclick = () => {
+  if (!monGain) return;
+  const on = monGain.gain.value < 0.01;
+  monGain.gain.value = on ? 0.9 : 0;
+  $('mon').textContent = '返送：' + (on ? '开' : '关');
+  $('mon').classList.toggle('on', on);
+};
+$('micMode').onchange = () => {                          // 换模式要重开一次 —— constraints 只在打开那一刻生效
+  if (micStream) { closeMic(); openMic(); }              // closeMic 是同步的，不用赌 setTimeout
+};
+$('rec').onclick = () => {
+  if (!micStream) return;
+  if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); return; }
+  chunks = [];
+  mediaRec = new MediaRecorder(micStream);
+  mediaRec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mediaRec.onstop = async () => {
+    const blob = new Blob(chunks, { type: mediaRec.mimeType || 'audio/webm' });
+    $('rec').textContent = '● 录音'; $('rec').classList.remove('on');
+    try {
+      const buf = await ac.decodeAudioData(await blob.arrayBuffer());
+      const nz = normalizeBuf(buf);                     // **先标准化再入库**
+      takes.push(buf);
+      /* **录到的直接变成一种音色，并指派给当前轨** —— 从"按下录音"到"能用它"只差这一步。
+         想反悔就把音色下拉切回原来的合成器（合成器一个都没删）。 */
+      const nm = addSample('录音' + takes.length, buf);
+      P.tracks[P.sel].preset = SP + nm;
+      buildTracks(); renderTakes(); drawAll();
+      $('stat').textContent = '录到 ' + buf.duration.toFixed(1) + ' 秒：原始峰值 ' + nz.peak.toFixed(3)
+        + (nz.gain > 1.05 ? ' → 放大了 ' + nz.gain.toFixed(1) + ' 倍' : '（够响，没动它）')
+        + '，已变成音色「' + SP + nm + '」并用在「' + P.tracks[P.sel].name + '」轨上。';
+    } catch (e) { $('recList').textContent = '解码失败：' + e.message; }
+  };
+  mediaRec.start();
+  $('rec').textContent = '■ 停止'; $('rec').classList.add('on');
+};
+function renderTakes() {
+  const box = $('recList');
+  box.innerHTML = takes.length
+    ? '录到 ' + takes.length + ' 段：' + takes.map((b, i) =>
+        '<button class="mini" data-i="' + i + '">听第' + (i + 1) + '段（' + b.duration.toFixed(1) + 's）</button>').join(' ')
+      + ' <button class="mini" id="takeExp">导出第 1 段 wav</button>'
+    : '还没录东西。点「● 录音」开始 —— 录的东西只在你这个浏览器里，不进文件体积。';
+  box.querySelectorAll('button[data-i]').forEach(btn => btn.onclick = () => {
+    if (!ac) return;
+    const s = ac.createBufferSource(); s.buffer = takes[+btn.dataset.i]; s.connect(master); s.start();
+  });
+  const ex = box.querySelector('#takeExp');
+  if (ex) ex.onclick = () => download(wavBlob(takes[0]), '录音-' + Date.now() + '.wav');
+}
+
+/* ── MIDI 键盘 ───────────────────────────────────────────────────────────── */
+if (navigator.requestMIDIAccess) {
+  navigator.requestMIDIAccess().then(m => {
+    const hook = () => {
+      for (const inp of m.inputs.values()) {
+        inp.onmidimessage = ev => {
+          const [st, n, v] = ev.data;
+          if ((st & 0xf0) === 0x90 && v > 0) { tr_last(n); playLive(n); }
+        };
+      }
+    };
+    hook(); m.onstatechange = hook;
+    $('stat').textContent = 'MIDI 就绪：' + m.inputs.size + ' 个输入设备。';
+  }).catch(() => {});
+}
+function tr_last(n) { const t = P.tracks[P.sel]; if (t) t.lastM = n; }
+
+/* ── 起手：给一小段示范（五声，随便好听） ─────────────────────────────── */
+(function demo() {
+  const A = P.tracks;
+  const root = 57;                       // A3
+  A[3].notes = [                         // 主旋律（唱）
+    {s:0,m:root+12,l:2,v:.9},{s:2,m:root+15,l:1,v:.8},{s:3,m:root+19,l:2,v:.85},
+    {s:6,m:root+17,l:2,v:.85},{s:8,m:root+15,l:2,v:.8},{s:10,m:root+12,l:3,v:.9},
+    {s:14,m:root+10,l:2,v:.8},{s:16,m:root+12,l:2,v:.9},{s:18,m:root+15,l:1,v:.8},
+    {s:19,m:root+19,l:2,v:.85},{s:22,m:root+22,l:2,v:.9},{s:24,m:root+19,l:3,v:.85},
+    {s:28,m:root+15,l:4,v:.8},
+  ];
+  A[2].notes = [                         // 和弦（垫）
+    {s:0,m:root,l:8,v:.5},{s:0,m:root+7,l:8,v:.45},{s:0,m:root+12,l:8,v:.4},
+    {s:8,m:root+5,l:8,v:.5},{s:8,m:root+12,l:8,v:.45},{s:8,m:root+17,l:8,v:.4},
+    {s:16,m:root,l:8,v:.5},{s:16,m:root+7,l:8,v:.45},{s:16,m:root+12,l:8,v:.4},
+    {s:24,m:root+7,l:8,v:.5},{s:24,m:root+14,l:8,v:.45},{s:24,m:root+19,l:8,v:.4},
+  ];
+  A[1].notes = [];                       // 低音
+  for (let s = 0; s < 32; s += 8) A[1].notes.push({s,m:root-12,l:3,v:.85},{s:s+4,m:root-12,l:3,v:.7});
+  A[0].notes = [];                       // 鼓
+  for (let s = 0; s < 32; s += 4) A[0].notes.push({s,m:60,l:1,v:1});
+  for (let s = 2; s < 32; s += 4) A[0].notes.push({s,m:60,l:1,v:.35});
+})();
+
+/* ── 刷新 ───────────────────────────────────────────────────────────────── */
+function refresh() { drawAll(); }
+buildTracks(); refresh();
+$('stat').textContent = '点上面网格里的格子就能出声。要先按一次「播放」或弹一个键，浏览器才允许发声音。';
+
+/* **把之前录的采样从浏览器里找回来** —— 有这一步，工程 JSON 里那句「用采样:录音1」才有意义。
+   这会儿它们还只是"记录"（Float32Array），等 ac 起来（第一次播放/录音）再造 AudioBuffer。 */
+(async () => {
+  try {
+    const recs = (await idbDo('readonly', s => s.getAll())) || [];
+    for (const r of recs) SAMPLES.set(r.name, { buf: null, rec: r, root: r.root });
+    if (recs.length) {
+      buildTracks(); drawAll();
+      $('stat').textContent = '从浏览器里找回了 ' + recs.length + ' 段采样：'
+        + recs.map(r => r.name).join('、') + ' —— 关掉浏览器它们也还在。';
+    }
+  } catch (e) { /* IndexedDB 用不了就算了，不影响别的功能 */ }
+})();
+
+/* ── 给验证用的钩子 ─────────────────────────────────────────────────────── */
+window.__probe = { P, schedule, PRESETS, SCALES, snapM, wavBlob, drawAll, buildMIDI, normalizeBuf,
+  zipFiles, crc32, SAMPLES,
+  get ac(){return ac}, stepsTotal, hz,
+  size(){ return document.documentElement.outerHTML.length } };
+</script>
+</body>
+</html>
